@@ -1,12 +1,11 @@
 {
   "ssid": "",
   "passwd": "",
-  "timeout": 4000,
-  "first_layer_timeout": 8000,
-  "elegooip": "192.168.1.123",
+  "elegooip": "",
   "pause_on_runout": true,
-  "ap_mode": true,
+  "ap_mode": false,
   "start_print_timeout": 10000,
   "enabled": true,
-  "has_connected": false
+  "has_connected": false,
+  "dev_mode": true
 }

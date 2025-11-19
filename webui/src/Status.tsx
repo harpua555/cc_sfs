@@ -26,6 +26,7 @@ const PRINT_STATUS_MAP = {
 function Status() {
 
   const [loading, setLoading] = createSignal(true)
+  const [error, setError] = createSignal<string | null>(null)
   const [sensorStatus, setSensorStatus] = createSignal({
     stopped: false,
     filamentRunout: false,
@@ -40,14 +41,31 @@ function Status() {
       totalTicks: 0,
       PrintSpeedPct: 0,
       isWebsocketConnected: false,
+      expectedFilament: 0,
+      actualFilament: 0,
+      expectedDelta: 0,
+      telemetryAvailable: false,
+      currentDeficitMm: 0,
+      deficitThresholdMm: 0,
+      deficitRatio: 0,
     }
   })
 
   const refreshSensorStatus = async () => {
-    const response = await fetch('/sensor_status')
-    const data = await response.json()
-    setSensorStatus(data)
-    setLoading(false)
+    try {
+      const response = await fetch('/sensor_status')
+      if (!response.ok) {
+        throw new Error(`Failed to load sensor status: ${response.status} ${response.statusText}`)
+      }
+      const data = await response.json()
+      setSensorStatus(data)
+      setError(null)
+    } catch (err: any) {
+      console.error('Failed to load sensor status:', err)
+      setError(err?.message || 'Failed to load sensor status')
+    } finally {
+      setLoading(false)
+    }
   }
 
   onMount(async () => {
@@ -66,6 +84,11 @@ function Status() {
         <p><span class="loading loading-spinner loading-xl"></span></p>
       ) : (
         <div>
+          {error() && (
+            <div role="alert" class="mb-4 alert alert-error">
+              {error()}
+            </div>
+          )}
           <div class="stats w-full shadow bg-base-200">
             {sensorStatus().elegoo.isWebsocketConnected && <>
               <div class="stat">
@@ -120,9 +143,33 @@ function Status() {
                   <h3 class="font-bold">Total Ticks</h3>
                   <p>{sensorStatus().elegoo.totalTicks}</p>
                 </div>
-                <div>
+              <div>
                   <h3 class="font-bold">Print Speed</h3>
                   <p>{sensorStatus().elegoo.PrintSpeedPct}</p>
+                </div>
+                <div>
+                  <h3 class="font-bold">Telemetry Available</h3>
+                  <p>{sensorStatus().elegoo.telemetryAvailable ? 'Yes' : 'No'}</p>
+                </div>
+                <div>
+                  <h3 class="font-bold">Expected Filament (mm)</h3>
+                  <p>{sensorStatus().elegoo.expectedFilament}</p>
+                </div>
+                <div>
+                  <h3 class="font-bold">Actual Filament (mm)</h3>
+                  <p>{sensorStatus().elegoo.actualFilament}</p>
+                </div>
+                <div>
+                  <h3 class="font-bold">Last Expected Delta (mm)</h3>
+                  <p>{sensorStatus().elegoo.expectedDelta}</p>
+                </div>
+                <div>
+                  <h3 class="font-bold">Deficit (mm)</h3>
+                  <p>{sensorStatus().elegoo.currentDeficitMm?.toFixed?.(3) ?? sensorStatus().elegoo.currentDeficitMm}</p>
+                </div>
+                <div>
+                  <h3 class="font-bold">Deficit (% of threshold)</h3>
+                  <p>{(sensorStatus().elegoo.deficitRatio * 100).toFixed(1)}%</p>
                 </div>
               </div>
             </div>

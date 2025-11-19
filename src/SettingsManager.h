@@ -10,14 +10,14 @@ struct user_settings
     String passwd;
     bool   ap_mode;
     String elegooip;
-    int    timeout;
-    int    first_layer_timeout;
     bool   pause_on_runout;
     int    start_print_timeout;
     bool   enabled;
     bool   has_connected;
     float  expected_deficit_mm;
     int    expected_flow_window_ms;
+    int    sdcp_loss_behavior;
+    bool   dev_mode;
 };
 
 class SettingsManager
@@ -48,27 +48,27 @@ class SettingsManager
     String getPassword();
     bool   isAPMode();
     String getElegooIP();
-    int    getTimeout();
-    int    getFirstLayerTimeout();
     bool   getPauseOnRunout();
     int    getStartPrintTimeout();
     bool   getEnabled();
     bool   getHasConnected();
     float  getExpectedDeficitMM();
     int    getExpectedFlowWindowMs();
+    int    getSdcpLossBehavior();
+    bool   getDevMode();
 
     void setSSID(const String &ssid);
     void setPassword(const String &password);
     void setAPMode(bool apMode);
     void setElegooIP(const String &ip);
-    void setTimeout(int timeout);
-    void setFirstLayerTimeout(int timeout);
     void setPauseOnRunout(bool pauseOnRunout);
     void setStartPrintTimeout(int timeoutMs);
     void setEnabled(bool enabled);
     void setHasConnected(bool hasConnected);
     void setExpectedDeficitMM(float value);
     void setExpectedFlowWindowMs(int windowMs);
+    void setSdcpLossBehavior(int behavior);
+    void setDevMode(bool devMode);
 
     String toJson(bool includePassword = true);
 };

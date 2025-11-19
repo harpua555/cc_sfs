@@ -94,6 +94,9 @@ typedef struct
     float               actualFilamentMM;
     float               lastExpectedDeltaMM;
     bool                telemetryAvailable;
+    float               currentDeficitMm;
+    float               deficitThresholdMm;
+    float               deficitRatio;
 } printer_info_t;
 
 class ElegooCC
@@ -128,6 +131,11 @@ class ElegooCC
     bool                expectedTelemetryAvailable;
     unsigned long       lastSuccessfulTelemetryMs;
     unsigned long       lastTelemetryReceiveMs;
+    unsigned long       lastStatusReceiveMs;
+    bool                telemetryAvailableLastStatus;
+    float               currentDeficitMm;
+    float               deficitThresholdMm;
+    float               deficitRatio;
 
     unsigned long startedAt;
     FilamentFlowTracker flowTracker;
@@ -137,6 +145,7 @@ class ElegooCC
     int           pendingAckCommand;
     String        pendingAckRequestId;
     unsigned long ackWaitStartTime;
+    unsigned long lastPauseRequestMs;
 
     ElegooCC();
 
@@ -154,7 +163,7 @@ class ElegooCC
 
     void resetFilamentTracking();
     void updateExpectedFilament(unsigned long currentTime);
-    void processFilamentTelemetry(JsonObject& printInfo, unsigned long currentTime);
+    bool processFilamentTelemetry(JsonObject& printInfo, unsigned long currentTime);
     bool tryReadExtrusionValue(JsonObject& printInfo, const char* key, const char* hexKey,
                                float& output);
 
@@ -175,6 +184,8 @@ class ElegooCC
 
     // Get current printer information
     printer_info_t getCurrentInformation();
+
+    bool discoverPrinterIP(String &outIp, unsigned long timeoutMs = 3000);
 };
 
 // Convenience macro for easier access

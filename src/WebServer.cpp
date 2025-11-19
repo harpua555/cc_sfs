@@ -39,7 +39,6 @@ void WebServer::begin()
                 settingsManager.setPassword(jsonObj["passwd"].as<String>());
             }
             settingsManager.setAPMode(jsonObj["ap_mode"].as<bool>());
-            settingsManager.setTimeout(jsonObj["timeout"].as<int>());
             settingsManager.setPauseOnRunout(jsonObj["pause_on_runout"].as<bool>());
             settingsManager.setEnabled(jsonObj["enabled"].as<bool>());
             settingsManager.setStartPrintTimeout(jsonObj["start_print_timeout"].as<int>());
@@ -51,10 +50,42 @@ void WebServer::begin()
             {
                 settingsManager.setExpectedFlowWindowMs(jsonObj["expected_flow_window_ms"].as<int>());
             }
+            if (jsonObj.containsKey("sdcp_loss_behavior"))
+            {
+                settingsManager.setSdcpLossBehavior(jsonObj["sdcp_loss_behavior"].as<int>());
+            }
+            if (jsonObj.containsKey("dev_mode"))
+            {
+                settingsManager.setDevMode(jsonObj["dev_mode"].as<bool>());
+            }
             settingsManager.save();
             jsonObj.clear();
             request->send(200, "text/plain", "ok");
         }));
+
+    server.on("/discover_printer", HTTP_GET,
+              [](AsyncWebServerRequest *request)
+              {
+                  String ip;
+                  if (!elegooCC.discoverPrinterIP(ip, 3000))
+                  {
+                      DynamicJsonDocument jsonDoc(128);
+                      jsonDoc["error"] = "No printer found";
+                      String jsonResponse;
+                      serializeJson(jsonDoc, jsonResponse);
+                      request->send(504, "application/json", jsonResponse);
+                      return;
+                  }
+
+                  settingsManager.setElegooIP(ip);
+                  settingsManager.save(true);
+
+                  DynamicJsonDocument jsonDoc(128);
+                  jsonDoc["elegooip"] = ip;
+                  String jsonResponse;
+                  serializeJson(jsonDoc, jsonResponse);
+                  request->send(200, "application/json", jsonResponse);
+              });
 
     // Setup ElegantOTA
     ElegantOTA.begin(&server);
@@ -85,6 +116,9 @@ void WebServer::begin()
                   jsonDoc["elegoo"]["actualFilament"]       = elegooStatus.actualFilamentMM;
                   jsonDoc["elegoo"]["expectedDelta"]        = elegooStatus.lastExpectedDeltaMM;
                   jsonDoc["elegoo"]["telemetryAvailable"]   = elegooStatus.telemetryAvailable;
+                  jsonDoc["elegoo"]["currentDeficitMm"]     = elegooStatus.currentDeficitMm;
+                  jsonDoc["elegoo"]["deficitThresholdMm"]   = elegooStatus.deficitThresholdMm;
+                  jsonDoc["elegoo"]["deficitRatio"]         = elegooStatus.deficitRatio;
 
                   String jsonResponse;
                   serializeJson(jsonDoc, jsonResponse);

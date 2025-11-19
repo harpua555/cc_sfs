@@ -4,8 +4,6 @@ function Settings() {
   const [ssid, setSsid] = createSignal('')
   const [password, setPassword] = createSignal('')
   const [elegooip, setElegooip] = createSignal('')
-  const [timeout, setTimeoutValue] = createSignal(2000)
-  const [firstLayerTimeout, setFirstLayerTimeout] = createSignal(4000)
   const [startPrintTimeout, setStartPrintTimeout] = createSignal(10000)
   const [expectedDeficit, setExpectedDeficit] = createSignal(8.4)
   const [expectedWindow, setExpectedWindow] = createSignal(1500)
@@ -15,6 +13,10 @@ function Settings() {
   const [apMode, setApMode] = createSignal<boolean | null>(null);
   const [pauseOnRunout, setPauseOnRunout] = createSignal(true);
   const [enabled, setEnabled] = createSignal(true);
+  const [sdcpLossBehavior, setSdcpLossBehavior] = createSignal(2);
+  const [devMode, setDevMode] = createSignal(false);
+  const [discovering, setDiscovering] = createSignal(false);
+  const [discoverSuccess, setDiscoverSuccess] = createSignal(false);
   // Load settings from the server and scan for WiFi networks
   onMount(async () => {
     try {
@@ -31,14 +33,14 @@ function Settings() {
       // Password won't be loaded from server for security
       setPassword('')
       setElegooip(settings.elegooip || '')
-      setTimeoutValue(settings.timeout || 2000)
-      setFirstLayerTimeout(settings.first_layer_timeout || 4000)
       setStartPrintTimeout(settings.start_print_timeout || 10000)
       setApMode(settings.ap_mode || null)
       setPauseOnRunout(settings.pause_on_runout !== undefined ? settings.pause_on_runout : true)
       setEnabled(settings.enabled !== undefined ? settings.enabled : true)
       setExpectedDeficit(settings.expected_deficit_mm !== undefined ? settings.expected_deficit_mm : 8.4)
       setExpectedWindow(settings.expected_flow_window_ms !== undefined ? settings.expected_flow_window_ms : 1500)
+      setSdcpLossBehavior(settings.sdcp_loss_behavior !== undefined ? settings.sdcp_loss_behavior : 2)
+      setDevMode(settings.dev_mode !== undefined ? settings.dev_mode : false)
 
       setError('')
     } catch (err: any) {
@@ -60,13 +62,13 @@ function Settings() {
         passwd: password(),
         ap_mode: false,
         elegooip: elegooip(),
-        timeout: timeout(),
-        first_layer_timeout: firstLayerTimeout(),
         pause_on_runout: pauseOnRunout(),
         start_print_timeout: startPrintTimeout(),
         enabled: enabled(),
         expected_deficit_mm: expectedDeficit(),
         expected_flow_window_ms: expectedWindow(),
+        sdcp_loss_behavior: sdcpLossBehavior(),
+        dev_mode: devMode(),
       }
 
       const response = await fetch('/update_settings', {
@@ -86,6 +88,29 @@ function Settings() {
     } catch (err: any) {
       setError(`Error saving settings: ${err.message || 'Unknown error'}`)
       console.error('Failed to save settings:', err)
+    }
+  }
+  const handleDiscover = async () => {
+    try {
+      setDiscoverSuccess(false)
+      setError('')
+      setDiscovering(true)
+
+      const response = await fetch('/discover_printer')
+      if (!response.ok) {
+        throw new Error(`Failed to discover printer: ${response.status} ${response.statusText}`)
+      }
+      const result = await response.json()
+      if (result.elegooip) {
+        setElegooip(result.elegooip)
+      }
+      setDiscoverSuccess(true)
+      setTimeout(() => setDiscoverSuccess(false), 3000)
+    } catch (err: any) {
+      setError(`Error discovering printer: ${err.message || 'Unknown error'}`)
+      console.error('Failed to discover printer:', err)
+    } finally {
+      setDiscovering(false)
     }
   }
 
@@ -164,23 +189,14 @@ function Settings() {
               placeholder="xxx.xxx.xxx.xxx"
               class="input"
             />
+            <button class="btn mt-2" disabled={discovering()} onClick={handleDiscover}>
+              {discovering() ? 'Discovering...' : 'Auto-detect printer'}
+            </button>
+            {discoverSuccess() && (
+              <p class="label text-success">Printer IP detected and applied.</p>
+            )}
           </fieldset>
 
-
-          <fieldset class="fieldset">
-            <legend class="fieldset-legend">Movment Sensor Timeout</legend>
-            <input
-              type="number"
-              id="timeout"
-              value={timeout()}
-              onInput={(e) => setTimeoutValue(parseInt(e.target.value) || 5000)}
-              min="100"
-              max="30000"
-              step="100"
-              class="input"
-            />
-            <p class="label">Value in milliseconds between reading from the movement sensor</p>
-          </fieldset>
 
           <fieldset class="fieldset">
             <legend class="fieldset-legend">Expected Flow Deficit Threshold (mm)</legend>
@@ -213,21 +229,6 @@ function Settings() {
           </fieldset>
 
           <fieldset class="fieldset">
-            <legend class="fieldset-legend">First Layer Timeout</legend>
-            <input
-              type="number"
-              id="firstLayerTimeout"
-              value={firstLayerTimeout()}
-              onInput={(e) => setFirstLayerTimeout(parseInt(e.target.value) || 4000)}
-              min="100"
-              max="60000"
-              step="100"
-              class="input"
-            />
-            <p class="label">Timeout in milliseconds for first layer</p>
-          </fieldset>
-
-          <fieldset class="fieldset">
             <legend class="fieldset-legend">Start Print Timeout</legend>
             <input
               type="number"
@@ -254,6 +255,33 @@ function Settings() {
               />
               <span class="label-text">Pause printing when filament runs out, rather than letting the Elegoo Centauri Carbon handle the runout</span>
 
+            </label>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Behavior when SDCP replies are lost</legend>
+            <select
+              id="sdcpLossBehavior"
+              class="select"
+              value={sdcpLossBehavior()}
+              onChange={(e) => setSdcpLossBehavior(parseInt(e.target.value) || 2)}
+            >
+              <option value={1}>Pause print when SDCP replies stop</option>
+              <option value={2}>Disable detection until SDCP replies return</option>
+            </select>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Developer Mode</legend>
+            <label class="label cursor-pointer">
+              <input
+                type="checkbox"
+                id="devMode"
+                checked={devMode()}
+                onChange={(e) => setDevMode(e.target.checked)}
+                class="checkbox checkbox-accent"
+              />
+              <span class="label-text">When enabled, pause commands to the printer are suppressed but detection and logging still occur.</span>
             </label>
           </fieldset>
 

@@ -22,14 +22,14 @@ SettingsManager::SettingsManager()
     settings.ssid                = "";
     settings.passwd              = "";
     settings.elegooip            = "";
-    settings.timeout             = 4000;
-    settings.first_layer_timeout = 8000;
     settings.pause_on_runout     = true;
     settings.start_print_timeout = 10000;
     settings.enabled             = true;
     settings.has_connected       = false;
     settings.expected_deficit_mm      = 8.4f;
     settings.expected_flow_window_ms  = 1500;
+    settings.sdcp_loss_behavior       = 2;
+    settings.dev_mode                 = false;
 }
 
 bool SettingsManager::load()
@@ -57,8 +57,6 @@ bool SettingsManager::load()
     settings.ssid                = doc["ssid"] | "";
     settings.passwd              = doc["passwd"] | "";
     settings.elegooip            = doc["elegooip"] | "";
-    settings.timeout             = doc["timeout"] | 4000;
-    settings.first_layer_timeout = doc["first_layer_timeout"] | 8000;
     settings.pause_on_runout     = doc["pause_on_runout"] | true;
     settings.enabled             = doc["enabled"] | true;
     settings.start_print_timeout = doc["start_print_timeout"] | 10000;
@@ -68,6 +66,10 @@ bool SettingsManager::load()
     settings.expected_flow_window_ms =
         doc.containsKey("expected_flow_window_ms") ? doc["expected_flow_window_ms"].as<int>()
                                                    : 1500;
+    settings.sdcp_loss_behavior =
+        doc.containsKey("sdcp_loss_behavior") ? doc["sdcp_loss_behavior"].as<int>() : 2;
+    settings.dev_mode =
+        doc.containsKey("dev_mode") ? doc["dev_mode"].as<bool>() : false;
 
     isLoaded = true;
     return true;
@@ -131,16 +133,6 @@ String SettingsManager::getElegooIP()
     return getSettings().elegooip;
 }
 
-int SettingsManager::getTimeout()
-{
-    return getSettings().timeout;
-}
-
-int SettingsManager::getFirstLayerTimeout()
-{
-    return getSettings().first_layer_timeout;
-}
-
 bool SettingsManager::getPauseOnRunout()
 {
     return getSettings().pause_on_runout;
@@ -169,6 +161,16 @@ float SettingsManager::getExpectedDeficitMM()
 int SettingsManager::getExpectedFlowWindowMs()
 {
     return getSettings().expected_flow_window_ms;
+}
+
+int SettingsManager::getSdcpLossBehavior()
+{
+    return getSettings().sdcp_loss_behavior;
+}
+
+bool SettingsManager::getDevMode()
+{
+    return getSettings().dev_mode;
 }
 
 void SettingsManager::setSSID(const String &ssid)
@@ -209,20 +211,6 @@ void SettingsManager::setElegooIP(const String &ip)
     if (!isLoaded)
         load();
     settings.elegooip = ip;
-}
-
-void SettingsManager::setTimeout(int timeout)
-{
-    if (!isLoaded)
-        load();
-    settings.timeout = timeout;
-}
-
-void SettingsManager::setFirstLayerTimeout(int timeout)
-{
-    if (!isLoaded)
-        load();
-    settings.first_layer_timeout = timeout;
 }
 
 void SettingsManager::setPauseOnRunout(bool pauseOnRunout)
@@ -267,6 +255,20 @@ void SettingsManager::setExpectedFlowWindowMs(int windowMs)
     settings.expected_flow_window_ms = windowMs;
 }
 
+void SettingsManager::setSdcpLossBehavior(int behavior)
+{
+    if (!isLoaded)
+        load();
+    settings.sdcp_loss_behavior = behavior;
+}
+
+void SettingsManager::setDevMode(bool devMode)
+{
+    if (!isLoaded)
+        load();
+    settings.dev_mode = devMode;
+}
+
 String SettingsManager::toJson(bool includePassword)
 {
     String                   output;
@@ -275,14 +277,14 @@ String SettingsManager::toJson(bool includePassword)
     doc["ap_mode"]             = settings.ap_mode;
     doc["ssid"]                = settings.ssid;
     doc["elegooip"]            = settings.elegooip;
-    doc["timeout"]             = settings.timeout;
-    doc["first_layer_timeout"] = settings.first_layer_timeout;
     doc["pause_on_runout"]     = settings.pause_on_runout;
     doc["start_print_timeout"] = settings.start_print_timeout;
     doc["enabled"]             = settings.enabled;
     doc["has_connected"]       = settings.has_connected;
     doc["expected_deficit_mm"] = settings.expected_deficit_mm;
     doc["expected_flow_window_ms"] = settings.expected_flow_window_ms;
+    doc["sdcp_loss_behavior"] = settings.sdcp_loss_behavior;
+    doc["dev_mode"] = settings.dev_mode;
 
     if (includePassword)
     {

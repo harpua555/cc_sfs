@@ -1,19 +1,24 @@
 #include "ElegooCC.h"
 
 #include <ArduinoJson.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
 
 #include "FilamentFlowTracker.h"
 #include "Logger.h"
 #include "SettingsManager.h"
 
 #define ACK_TIMEOUT_MS 5000
-constexpr float        MOVEMENT_MM_PER_TOGGLE               = 2.8f;
-constexpr float        DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM = 8.4f;  // ~3 SFS toggles
-constexpr unsigned int EXPECTED_FILAMENT_SAMPLE_MS   = 250;
-constexpr unsigned int EXPECTED_FILAMENT_STALE_MS    = 1000;
+constexpr float        MOVEMENT_MM_PER_TOGGLE                = 2.8f;
+constexpr float        DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM = 8.4f;
+constexpr unsigned int EXPECTED_FILAMENT_SAMPLE_MS           = 250;
+constexpr unsigned int EXPECTED_FILAMENT_STALE_MS            = 1000;
+constexpr unsigned int SDCP_LOSS_TIMEOUT_MS                  = 10000;
+constexpr unsigned int PAUSE_REARM_DELAY_MS                  = 3000;
 static const char*     TOTAL_EXTRUSION_HEX_KEY       = "54 6F 74 61 6C 45 78 74 72 75 73 69 6F 6E 00";
 static const char*     CURRENT_EXTRUSION_HEX_KEY =
     "43 75 72 72 65 6E 74 45 78 74 72 75 73 69 6F 6E 00";
+static const uint16_t  SDCP_DISCOVERY_PORT = 30000;
 
 // External function to get current time (from main.cpp)
 extern unsigned long getTime();
@@ -46,14 +51,19 @@ ElegooCC::ElegooCC()
     lastExpectedDeltaMM        = 0;
     expectedTelemetryAvailable = false;
     lastSuccessfulTelemetryMs  = 0;
-    expectedDeficitStartMs     = 0;
     lastTelemetryReceiveMs     = 0;
+    lastStatusReceiveMs        = 0;
+    telemetryAvailableLastStatus = false;
+    currentDeficitMm             = 0.0f;
+    deficitThresholdMm           = 0.0f;
+    deficitRatio                 = 0.0f;
     flowTracker.reset();
 
     waitingForAck       = false;
     pendingAckCommand   = -1;
     pendingAckRequestId = "";
     ackWaitStartTime    = 0;
+    lastPauseRequestMs  = 0;
 
     // TODO: send a UDP broadcast, M99999 on Port 30000, maybe using AsyncUDP.h and listen for the
     // result. this will give us the printer IP address.
@@ -166,8 +176,7 @@ void ElegooCC::handleStatus(JsonDocument &doc)
     JsonObject status      = doc["Status"];
     String     mainboardId = doc["MainboardID"];
     unsigned long statusTimestamp = millis();
-
-    logger.log("Received status update:");
+    lastStatusReceiveMs          = statusTimestamp;
 
     // Parse current status (which contains machine status array)
     if (status.containsKey("CurrentStatus"))
@@ -212,11 +221,6 @@ void ElegooCC::handleStatus(JsonDocument &doc)
                 startedAt = millis();
                 resetFilamentTracking();
             }
-            else if (printStatus == SDCP_PRINT_STATUS_PRINTING)
-            {
-                logger.log("Print left printing state, resetting filament tracking");
-                resetFilamentTracking();
-            }
         }
         printStatus   = newStatus;
         currentLayer  = printInfo["CurrentLayer"];
@@ -225,7 +229,7 @@ void ElegooCC::handleStatus(JsonDocument &doc)
         currentTicks  = printInfo["CurrentTicks"];
         totalTicks    = printInfo["TotalTicks"];
         PrintSpeedPct = printInfo["PrintSpeedPct"];
-        processFilamentTelemetry(printInfo, statusTimestamp);
+        telemetryAvailableLastStatus = processFilamentTelemetry(printInfo, statusTimestamp);
     }
 
     // Store mainboard ID if we don't have it yet (I'm unsure if we actually need this)
@@ -278,7 +282,7 @@ bool ElegooCC::tryReadExtrusionValue(JsonObject &printInfo, const char *key, con
     return false;
 }
 
-void ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long currentTime)
+bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long currentTime)
 {
     float totalValue = 0;
     float deltaValue = 0;
@@ -289,10 +293,13 @@ void ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
 
     if (!hasTotal && !hasDelta)
     {
-        return;
+        expectedTelemetryAvailable   = false;
+        telemetryAvailableLastStatus = false;
+        return false;
     }
 
-    expectedTelemetryAvailable = true;
+    telemetryAvailableLastStatus = true;
+    expectedTelemetryAvailable   = true;
     lastSuccessfulTelemetryMs  = currentTime;
     lastTelemetryReceiveMs     = currentTime;
 
@@ -315,10 +322,19 @@ void ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
             flowTracker.addExpected(deltaValue, currentTime, pruneWindow);
         }
     }
+
+    return true;
 }
 
 void ElegooCC::pausePrint()
 {
+    if (settingsManager.getDevMode())
+    {
+        lastPauseRequestMs = millis();
+        logger.log("Dev mode is enabled: pausePrint suppressed (would send pause command)");
+        return;
+    }
+    lastPauseRequestMs = millis();
     sendCommand(SDCP_COMMAND_PAUSE_PRINT, true);
 }
 
@@ -348,19 +364,33 @@ void ElegooCC::sendCommand(int command, bool waitForAck)
     uuidStr.replace("-", "");  // RequestID doesn't want dashes
 
     // Get current timestamp
-    unsigned long timestamp   = getTime();
-    String        jsonPayload = "{";
-    jsonPayload += "\"Id\":\"" + uuidStr + "\",";
-    jsonPayload += "\"Data\":{";
-    jsonPayload += "\"Cmd\":" + String(command) + ",";
-    jsonPayload += "\"Data\":{},";
-    jsonPayload += "\"RequestID\":\"" + uuidStr + "\",";
-    jsonPayload += "\"MainboardID\":\"" + mainboardID + "\",";
-    jsonPayload += "\"TimeStamp\":" + String(timestamp) + ",";
-    jsonPayload += "\"From\":2";  // I don't know if this is used, but octoeverywhere sets theirs to
-                                  // 0, and the web client sets it to 1, so we'll choose 2?
-    jsonPayload += "}";
-    jsonPayload += "}";
+    unsigned long timestamp = getTime();
+
+    StaticJsonDocument<512> doc;
+    doc["Id"] = uuidStr;
+    JsonObject data = doc.createNestedObject("Data");
+    data["Cmd"]     = command;
+    data["RequestID"]   = uuidStr;
+    data["MainboardID"] = mainboardID;
+    data["TimeStamp"]   = timestamp;
+    data["From"]        = 2;  // 0: OctoEverywhere, 1: web client, 2: this device
+
+    // Explicit empty Data object (matches existing payload structure)
+    data.createNestedObject("Data");
+
+    // Include current SDCP print and machine status, mirroring the status payload fields.
+    data["PrintStatus"] = static_cast<int>(printStatus);
+    JsonArray currentStatus = data.createNestedArray("CurrentStatus");
+    for (int s = 0; s <= 4; ++s)
+    {
+        if (hasMachineStatus(static_cast<sdcp_machine_status_t>(s)))
+        {
+            currentStatus.add(s);
+        }
+    }
+
+    String jsonPayload;
+    serializeJson(doc, jsonPayload);
 
     // If this command requires an ack, set the tracking state
     if (waitForAck)
@@ -452,13 +482,6 @@ void ElegooCC::checkFilamentRunout(unsigned long currentTime)
 void ElegooCC::checkFilamentMovement(unsigned long currentTime)
 {
     int currentMovementValue = digitalRead(MOVEMENT_SENSOR_PIN);
-    bool expectationActive  = expectedTelemetryAvailable;
-    bool movementTimeoutHit = false;
-
-    // CurrentLayer is unreliable when using Orcaslicer 2.3.0, because it is missing some g-code,so
-    // we use Z instead. , assuming first layer is at Z offset <  0.1
-    int movementTimeout =
-        currentZ < 0.1 ? settingsManager.getFirstLayerTimeout() : settingsManager.getTimeout();
 
     // Track movement pulses so we know how much filament actually moved
     if (currentMovementValue != lastMovementValue)
@@ -472,14 +495,24 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
         lastMovementValue = currentMovementValue;
         lastChangeTime    = currentTime;
     }
-    else
+
+    // If we don't have expected telemetry from SDCP, don't attempt movement-only detection.
+    // FilamentStopped should only be derived from SDCP extrusion data.
+    if (!expectedTelemetryAvailable)
     {
-        movementTimeoutHit = (currentTime - lastChangeTime) >= movementTimeout;
+        currentDeficitMm   = 0.0f;
+        deficitThresholdMm = 0.0f;
+        deficitRatio       = 0.0f;
+        if (filamentStopped)
+        {
+            logger.log("Filament movement started");
+        }
+        filamentStopped = false;
+        return;
     }
 
     float deficit               = 0;
     bool  deficitTriggered      = false;
-    bool  usedExpectedTelemetry = false;
     float threshold             = settingsManager.getExpectedDeficitMM();
     if (threshold <= 0)
     {
@@ -492,26 +525,25 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     }
     unsigned long pruneWindow = holdMs * 2;
 
-    if (expectationActive)
+    deficit = flowTracker.outstanding(currentTime, pruneWindow);
+    if (deficit < 0)
     {
-        usedExpectedTelemetry = true;
-        deficit               = flowTracker.outstanding(currentTime, pruneWindow);
-        if (deficit < 0)
-        {
-            deficit = 0;
-        }
-        deficitTriggered = deficit >= threshold;
+        deficit = 0;
     }
+    deficitTriggered = deficit >= threshold;
 
     bool deficitHoldSatisfied =
-        usedExpectedTelemetry &&
         flowTracker.deficitSatisfied(deficit, currentTime, threshold, holdMs);
 
-    bool newFilamentStopped = usedExpectedTelemetry ? deficitHoldSatisfied : movementTimeoutHit;
+    currentDeficitMm   = deficit;
+    deficitThresholdMm = threshold;
+    deficitRatio       = (threshold > 0.0f) ? (deficit / threshold) : 0.0f;
+
+    bool newFilamentStopped = deficitHoldSatisfied;
 
     if (newFilamentStopped && !filamentStopped)
     {
-        if (usedExpectedTelemetry && deficitTriggered)
+        if (deficitTriggered)
         {
             logger.logf(
                 "Filament deficit detected (outstanding %.2fmm, threshold %.2fmm, hold %lums, last "
@@ -534,7 +566,6 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
 
 bool ElegooCC::shouldPausePrint(unsigned long currentTime)
 {
-    // If pause function is completely disabled, always return false
     if (!settingsManager.getEnabled())
     {
         return false;
@@ -547,17 +578,33 @@ bool ElegooCC::shouldPausePrint(unsigned long currentTime)
         return false;
     }
 
-    // Only puase if getPauseOnRunout is enabled and filement runsout or filamentStopped.
     bool pauseCondition = filamentRunout || filamentStopped;
 
-    // Don't pause in the first X milliseconds (configurable in settings)
-    // Don't pause if the websocket is not connected (we can't pause anyway if we're not connected)
-    // Don't pause if we're waiting for an ack
-    // Don't pause if we have less than 100t tickets left, the print is probably done
-    // TODO: also add a buffer after pause because sometimes an ack comes before the update
+    bool           sdcpLoss      = false;
+    unsigned long  lastSuccessMs = lastSuccessfulTelemetryMs;
+    int            lossBehavior  = settingsManager.getSdcpLossBehavior();
+    if (webSocket.isConnected() && isPrinting() && lastSuccessMs > 0 &&
+        (currentTime - lastSuccessMs) > SDCP_LOSS_TIMEOUT_MS)
+    {
+        sdcpLoss = true;
+    }
+
+    if (sdcpLoss)
+    {
+        if (lossBehavior == 1)
+        {
+            pauseCondition = true;
+        }
+        else if (lossBehavior == 2)
+        {
+            pauseCondition = false;
+        }
+    }
+
     if (currentTime - startedAt < settingsManager.getStartPrintTimeout() ||
         !webSocket.isConnected() || waitingForAck || !isPrinting() ||
-        (totalTicks - currentTicks) < 100 || !pauseCondition)
+        (totalTicks - currentTicks) < 100 || !pauseCondition ||
+        (lastPauseRequestMs != 0 && (currentTime - lastPauseRequestMs) < PAUSE_REARM_DELAY_MS))
     {
         return false;
     }
@@ -620,7 +667,71 @@ printer_info_t ElegooCC::getCurrentInformation()
     info.expectedFilamentMM   = expectedFilamentMM;
     info.actualFilamentMM     = actualFilamentMM;
     info.lastExpectedDeltaMM  = lastExpectedDeltaMM;
-    info.telemetryAvailable   = expectedTelemetryAvailable;
+    info.telemetryAvailable   = telemetryAvailableLastStatus;
+    // Expose deficit metrics for UI/debugging
+    info.currentDeficitMm     = currentDeficitMm;
+    info.deficitThresholdMm   = deficitThresholdMm;
+    info.deficitRatio         = deficitRatio;
 
     return info;
+}
+
+bool ElegooCC::discoverPrinterIP(String &outIp, unsigned long timeoutMs)
+{
+    WiFiUDP udp;
+    if (!udp.begin(SDCP_DISCOVERY_PORT))
+    {
+        logger.log("Failed to open UDP socket for discovery");
+        return false;
+    }
+
+    // Use subnet-based broadcast rather than 255.255.255.255 to be friendlier
+    // to routers that filter global broadcast.
+    IPAddress localIp   = WiFi.localIP();
+    IPAddress subnet    = WiFi.subnetMask();
+    IPAddress broadcastIp((localIp[0] & subnet[0]) | ~subnet[0],
+                          (localIp[1] & subnet[1]) | ~subnet[1],
+                          (localIp[2] & subnet[2]) | ~subnet[2],
+                          (localIp[3] & subnet[3]) | ~subnet[3]);
+
+    logger.logf("Sending SDCP discovery probe to %s", broadcastIp.toString().c_str());
+
+    udp.beginPacket(broadcastIp, SDCP_DISCOVERY_PORT);
+    udp.write(reinterpret_cast<const uint8_t *>("M99999"), 6);
+    udp.endPacket();
+
+    unsigned long start = millis();
+    while ((millis() - start) < timeoutMs)
+    {
+        int packetSize = udp.parsePacket();
+        if (packetSize > 0)
+        {
+            IPAddress remoteIp = udp.remoteIP();
+            if (remoteIp)
+            {
+                // Optional: read and log the payload for debugging
+                char buffer[128];
+                int  len = udp.read(buffer, sizeof(buffer) - 1);
+                if (len > 0)
+                {
+                    buffer[len] = '\0';
+                    logger.logf("Discovery reply from %s: %s", remoteIp.toString().c_str(),
+                                buffer);
+                }
+                else
+                {
+                    logger.logf("Discovery reply from %s (no payload)",
+                                remoteIp.toString().c_str());
+                }
+
+                outIp = remoteIp.toString();
+                udp.stop();
+                return true;
+            }
+        }
+        delay(10);
+    }
+
+    udp.stop();
+    return false;
 }

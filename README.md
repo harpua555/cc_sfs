@@ -1,3 +1,6 @@
+# NOTE!!!   This version of the BTT SFS implementation relies on a not-yet-released OC firmware version.  Do not attempt to use/run this build - it will not function without the specific patch! #
+
+
 # Advanced Filament Sensor for the Elegoo Carbon Centauri
 
 The Carbon Centauri is a great budget printer, but its filament runout sensor is a simple binary switch which cannot detect filament movement. This means the printer will print in mid-air if the filament gets tangled, breaks after the sensor, or fails to feed for any reason. This project aims to mitigate that issue with only two parts and 4 wires.
@@ -14,7 +17,7 @@ The Carbon Centauri is a great budget printer, but its filament runout sensor is
   - [Alternate Wiring](#alternate-wiring)
   - [Firmware Installation](#firmware-installation)
   - [WebUi](#webui)
-  - [Setting the timeout (time without movement)](#setting-the-timeout-time-without-movement)
+  - [Configuring jam detection](#configuring-jam-detection)
   - [3D printed case/adapter](#3d-printed-caseadapter)
   - [Known Issues / Todo](#known-issues--todo)
   - [Updating](#updating)
@@ -76,19 +79,32 @@ If you don't want to connect the device directly to the runout sensor, you may c
 4. Enter your wifi ssid, password, elegoo IP address and hit "save settings", the device will restart and connect to your network.
 5. Access the web UI at anytime by going to http;//ccxsfs20.local
 
+For local development builds (from this repo) you can also flash everything via a single script:
+
+```powershell
+python tools/build_and_flash.py --env esp32-s3-dev
+```
+
+This will build the Web UI, sync it into the `data/` filesystem image, and then upload both the firmware and filesystem to the ESP32 using PlatformIO.
+
 ## WebUi
 
 The WebUI shows the current status, whether filament has runout or stopped. It can be accessed by IP address or by going to [ccxsfs20.local](http://ccxsfs20.local) if you have mdns enabled on your network.
 
 ![ui screenshot](ui.png)
 
-## Setting the timeout (time without movement)
+## Configuring jam detection
 
-The BTT is meant to integrate with kipper or marlin firmware directly where the firmware knows how much filament _should_ be flowing. With the carbon, we can't know exactly how much it should be flowing, or at leaset, I haven't found a way. Therefore we use a timeout to aproximate how tolerant we should be to filament stopage. The BTT sensor reports an alternating value of HIGH/LOW (0/1) each time it detects the filament has moved 2.8mm. Each time it flips, we reset the timeout. If the value has not flipped after the timeout value has elapsed, the print is paused.
+The current firmware uses **extrusion telemetry from the printer (SDCP)** together with the BTT SFS 2.0 pulses to decide when filament has effectively stopped moving. You tune this behaviour from the Web UI **Settings** tab via:
 
-Setting the value too low, will mean that your prints might pause unexpectedly. Setting the value too high means your print may not be savable. Settings that impact the flow of your print may also require you to retune this value. The only way I've found to do this so far is to set the value low, start a test print, and then increase it until it reliably prints without pausing.
+- **Expected Flow Deficit Threshold (mm)** – how many mm of *requested* filament (from SDCP) are allowed to accumulate without matching SFS movement before the print is considered jammed.
+- **Expected Flow Window (ms)** – how long unmatched requested filament is kept before it is ignored (anti‑jitter). Larger windows smooth out bursty telemetry, smaller windows detect jams faster.
+- **Start Print Timeout (ms)** – grace period after a print starts before any pause can be triggered.
+- **Behavior when SDCP replies are lost** – what to do if SDCP extrusion data stops arriving while printing:
+  - Pause the print when SDCP replies stop.
+  - Disable jam detection until SDCP replies return (fail‑open).
 
-Note: the first layer uses 2 X Timeout because it is usually a slower flow layer and if you get a jam on your first layer, you're probably going to want to start over again anyway.
+Setting the deficit threshold too low may cause false positives on noisy prints; setting it too high may let jams run longer before being caught. The recommended approach is to start slightly conservative (lower threshold, shorter window), test on a simple print, and adjust upward until you no longer see spurious pauses.
 
 ## 3D printed case/adapter
 
@@ -98,7 +114,8 @@ The files are available in [models](/models) directory or on [MakerWorld](https:
 
 - [ ] Prints with ironing will fail, as there is no filament movement
 - [ ] update from GH rather than using easyota
-- [ ] use UDP ping to find/update Elegoo CC ip address like octoeverywhere does
+- [x] use UDP ping to find/update Elegoo CC ip address like octoeverywhere does (exposed as the
+      "Auto-detect printer" button in the Web UI settings)
 - [ ] maybe integrate with octoeverywhere as an alternative client, so you don't need another rpi or docker container?
 - [ ] support more boards like the Seeed Studio XIAO S3
 - [ ] printhead cover fall protection
@@ -151,4 +168,4 @@ python tools/gcode_flow_sim.py my_test_file.gcode --serve --repeat --speed 1.0
 ### Web UI
 
 Web UI code is a [SolidJS](https://www.solidjs.com/) app with [vite](https://vite.dev/) in the `/webui` folder, it comes with a mock server. Just run `npm i && npm run dev` in the web folder.
-Use `npm run build` in the `/web` folder to copy code into the `/data` folder, followed by `Upload file sytem image` command from PlatformIO
+Use `npm run build` in the `/webui` folder (or `python tools/build_and_flash.py`) to copy code into the `/data` folder, followed by the `Upload Filesystem Image` target in PlatformIO if you are flashing manually.
