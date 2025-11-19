@@ -81,6 +81,10 @@ void WebServer::begin()
                   jsonDoc["elegoo"]["PrintSpeedPct"]        = elegooStatus.PrintSpeedPct;
                   jsonDoc["elegoo"]["isWebsocketConnected"] = elegooStatus.isWebsocketConnected;
                   jsonDoc["elegoo"]["currentZ"]             = elegooStatus.currentZ;
+                  jsonDoc["elegoo"]["expectedFilament"]     = elegooStatus.expectedFilamentMM;
+                  jsonDoc["elegoo"]["actualFilament"]       = elegooStatus.actualFilamentMM;
+                  jsonDoc["elegoo"]["expectedDelta"]        = elegooStatus.lastExpectedDeltaMM;
+                  jsonDoc["elegoo"]["telemetryAvailable"]   = elegooStatus.telemetryAvailable;
 
                   String jsonResponse;
                   serializeJson(jsonDoc, jsonResponse);

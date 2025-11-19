@@ -117,6 +117,37 @@ This project uses PlatformIO and building is as easy as adding the VSCode extens
 
 C++ code is a platformio project in `/src` folder. You can find more info [in their getting started guide](https://platformio.org/platformio-ide).
 
+### Tooling & Local Tests
+
+- **PlatformIO Core:** install with `pip install -U platformio` (or via the VSCode extension) and add
+  `pio`/`platformio` to your PATH so firmware builds can be launched from a shell.
+- **Native toolchain:** the host-side unit tests (`pio test -e native`) require an MSYS2/MinGW
+  toolchain that provides `gcc`/`g++` on PATH (e.g. install MSYS2, then `pacman -S
+  mingw-w64-ucrt-x86_64-gcc` and add `<msys-root>\ucrt64\bin` to PATH).
+- **Python packages for utilities:** the helper CLI in `tools/` depends on `aiohttp`. Install
+  everything with `python -m pip install -r tools/requirements.txt`.
+- **Offline flow simulation:** `tools/gcode_flow_sim.py` can replay filament flow from any G-code
+  file so you can exercise the firmware without printing.
+
+Once these are in place:
+
+```powershell
+# build firmware only
+pio run -e esp32-s3-dev
+
+# run native unit tests (requires gcc/g++)
+pio test -e native
+
+# query the printer via websocket for extrusion metrics
+python tools/elegoo_status_cli.py --ip <printer-ip>
+
+# derive synthetic extrusion samples from G-code
+python tools/gcode_flow_sim.py my_test_file.gcode --output json
+
+# replay G-code over a mock websocket (repeats at 1x speed)
+python tools/gcode_flow_sim.py my_test_file.gcode --serve --repeat --speed 1.0
+```
+
 ### Web UI
 
 Web UI code is a [SolidJS](https://www.solidjs.com/) app with [vite](https://vite.dev/) in the `/webui` folder, it comes with a mock server. Just run `npm i && npm run dev` in the web folder.
