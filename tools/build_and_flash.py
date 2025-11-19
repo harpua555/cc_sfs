@@ -15,6 +15,7 @@ Options:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -59,6 +60,16 @@ def main() -> None:
     tools_dir = os.path.dirname(os.path.abspath(__file__))
     repo_root = os.path.dirname(tools_dir)
     webui_dir = os.path.join(repo_root, "webui")
+    data_dir = os.path.join(repo_root, "data")
+
+    # Ensure a base user_settings.json exists; this file should be safe to commit and can
+    # leave SSID/password/IP blank. Per-run secrets are provided via
+    # user_settings.secrets.json and merged only for the filesystem image.
+    settings_path = os.path.join(data_dir, "user_settings.json")
+    template_path = os.path.join(data_dir, "user_settings.template.json")
+    if not os.path.exists(settings_path) and os.path.exists(template_path):
+        shutil.copyfile(template_path, settings_path)
+        print("Created data/user_settings.json from template (no secrets).")
 
     # Build WebUI and sync into data/
     npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
@@ -79,8 +90,46 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # Filesystem upload
+    # Before uploading the filesystem, merge any local secrets into a temporary copy of
+    # user_settings.json so you don't have to commit your SSID/password/IP. After the
+    # upload, the original file contents are restored so the repo stays clean.
+    secrets_path = os.path.join(data_dir, "user_settings.secrets.json")
+    base_settings_text: Optional[str] = None
+    if os.path.exists(secrets_path):
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                base_settings_text = f.read()
+                base_settings = json.loads(base_settings_text or "{}")
+        except Exception as e:  # pragma: no cover
+            print(f"WARNING: Failed to read base user_settings.json: {e}")
+            base_settings = {}
+
+        try:
+            with open(secrets_path, "r", encoding="utf-8") as f:
+                secrets = json.load(f)
+        except Exception as e:  # pragma: no cover
+            print(f"WARNING: Failed to read user_settings.secrets.json: {e}")
+            secrets = {}
+
+        for key in ("ssid", "passwd", "elegooip"):
+            if key in secrets:
+                base_settings[key] = secrets[key]
+
+        # Write merged settings for the build only
+        with open(settings_path, "w", encoding="utf-8") as f:
+            json.dump(base_settings, f, indent=2)
+            f.write("\n")
+        print("Merged secrets into data/user_settings.json for this build (not committed).")
+
+    # Filesystem upload (uses merged settings if present)
     run([pio_cmd, "run", "-e", args.env, "-t", "uploadfs"], cwd=repo_root)
+
+    # Restore the original committed user_settings.json so secrets are not left in the
+    # working tree. This keeps git status clean and avoids accidental commits.
+    if base_settings_text is not None:
+        with open(settings_path, "w", encoding="utf-8") as f:
+            f.write(base_settings_text)
+        print("Restored original data/user_settings.json after filesystem upload.")
 
     # Firmware upload (will build firmware first if needed)
     run([pio_cmd, "run", "-e", args.env, "-t", "upload"], cwd=repo_root)

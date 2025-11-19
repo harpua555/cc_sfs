@@ -15,6 +15,9 @@ function Settings() {
   const [enabled, setEnabled] = createSignal(true);
   const [sdcpLossBehavior, setSdcpLossBehavior] = createSignal(2);
   const [devMode, setDevMode] = createSignal(false);
+  const [verboseLogging, setVerboseLogging] = createSignal(false);
+  const [keepExpectedForever, setKeepExpectedForever] = createSignal(false);
+  const [flowSummaryLogging, setFlowSummaryLogging] = createSignal(false);
   const [discovering, setDiscovering] = createSignal(false);
   const [discoverSuccess, setDiscoverSuccess] = createSignal(false);
   // Load settings from the server and scan for WiFi networks
@@ -41,6 +44,9 @@ function Settings() {
       setExpectedWindow(settings.expected_flow_window_ms !== undefined ? settings.expected_flow_window_ms : 1500)
       setSdcpLossBehavior(settings.sdcp_loss_behavior !== undefined ? settings.sdcp_loss_behavior : 2)
       setDevMode(settings.dev_mode !== undefined ? settings.dev_mode : false)
+      setVerboseLogging(settings.verbose_logging !== undefined ? settings.verbose_logging : false)
+      setKeepExpectedForever(settings.keep_expected_forever !== undefined ? settings.keep_expected_forever : false)
+      setFlowSummaryLogging(settings.flow_summary_logging !== undefined ? settings.flow_summary_logging : false)
 
       setError('')
     } catch (err: any) {
@@ -69,6 +75,9 @@ function Settings() {
         expected_flow_window_ms: expectedWindow(),
         sdcp_loss_behavior: sdcpLossBehavior(),
         dev_mode: devMode(),
+        verbose_logging: verboseLogging(),
+        keep_expected_forever: keepExpectedForever(),
+        flow_summary_logging: flowSummaryLogging(),
       }
 
       const response = await fetch('/update_settings', {
@@ -229,6 +238,20 @@ function Settings() {
           </fieldset>
 
           <fieldset class="fieldset">
+            <legend class="fieldset-legend">Keep Expected Filament Forever</legend>
+            <label class="label cursor-pointer">
+              <input
+                type="checkbox"
+                id="keepExpectedForever"
+                checked={keepExpectedForever()}
+                onChange={(e) => setKeepExpectedForever(e.target.checked)}
+                class="checkbox checkbox-accent"
+              />
+              <span class="label-text">When enabled, expected filament from SDCP is never pruned based on time; any requested filament remains outstanding until matched by sensor movement or overwritten by new telemetry.</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="fieldset">
             <legend class="fieldset-legend">Start Print Timeout</legend>
             <input
               type="number"
@@ -282,6 +305,34 @@ function Settings() {
                 class="checkbox checkbox-accent"
               />
               <span class="label-text">When enabled, pause commands to the printer are suppressed but detection and logging still occur.</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Verbose Flow Logging</legend>
+            <label class="label cursor-pointer">
+              <input
+                type="checkbox"
+                id="verboseLogging"
+                checked={verboseLogging()}
+                onChange={(e) => setVerboseLogging(e.target.checked)}
+                class="checkbox checkbox-accent"
+              />
+              <span class="label-text">When enabled, logs detailed filament flow data (movement pulses, expected vs actual, deficit) to the Logs tab.</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Flow Summary Logging (1 line/sec)</legend>
+            <label class="label cursor-pointer">
+              <input
+                type="checkbox"
+                id="flowSummaryLogging"
+                checked={flowSummaryLogging()}
+                onChange={(e) => setFlowSummaryLogging(e.target.checked)}
+                class="checkbox checkbox-accent"
+              />
+              <span class="label-text">When enabled (with verbose logging off), emits a single condensed flow line about once per second (expected, actual, deficit, pulses, ratio) instead of per-pulse debug logs.</span>
             </label>
           </fieldset>
 

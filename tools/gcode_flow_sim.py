@@ -166,16 +166,40 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_status_payload(delta: float, total: float) -> str:
-    """Build a websocket payload that mimics the Elegoo printer."""
+def build_status_payload(delta: float, total: float, index: int, count: int) -> str:
+    """Build a websocket payload that mimics the Elegoo printer.
+
+    We include the fields that the firmware expects for proper gating:
+    - PrintInfo.Status = 13 (printing)
+    - Status.CurrentStatus = [1] (SDCP_MACHINE_STATUS_PRINTING)
+    - Basic progress/ticks so the UI looks sane during simulation.
+    """
+    if count <= 0:
+        progress = 0
+        current_ticks = 0
+        total_ticks = 0
+    else:
+        progress = int(min(100, max(0, (index * 100) // count)))
+        total_ticks = count
+        current_ticks = min(index, count)
+
     status = {
         "Topic": "status/simulator",
         "Status": {
+            # Machine status array: [PRINTING]
+            "CurrentStatus": [1],
+            # Minimal PrintInfo block for ElegooCC::handleStatus
             "PrintInfo": {
-                "Status": 13,
+                "Status": 13,  # SDCP_PRINT_STATUS_PRINTING
+                "CurrentLayer": 0,
+                "TotalLayer": 0,
+                "Progress": progress,
+                "CurrentTicks": current_ticks,
+                "TotalTicks": total_ticks,
+                "PrintSpeedPct": 100,
                 "CurrentExtrusion": round(delta, 6),
                 "TotalExtrusion": round(total, 6),
-            }
+            },
         },
         "MainboardID": "SIMULATOR",
     }
@@ -194,7 +218,7 @@ async def stream_samples(
     count = len(samples)
     while True:
         for index, (_, delta, total) in enumerate(samples):
-            await ws.send_str(build_status_payload(delta, total))
+            await ws.send_str(build_status_payload(delta, total, index, count))
             if index + 1 < count:
                 delay_ms = samples[index + 1][0] - samples[index][0]
             else:

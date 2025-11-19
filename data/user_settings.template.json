@@ -10,8 +10,8 @@
   "expected_deficit_mm": 8.4,
   "expected_flow_window_ms": 1500,
   "sdcp_loss_behavior": 2,
-  "dev_mode": true,
-  "verbose_logging": true,
-  "keep_expected_forever": true,
-  "flow_summary_logging": true
+  "dev_mode": false,
+  "verbose_logging": false,
+  "keep_expected_forever": false,
+  "flow_summary_logging": false
 }

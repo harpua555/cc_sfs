@@ -48,6 +48,7 @@ function Status() {
       currentDeficitMm: 0,
       deficitThresholdMm: 0,
       deficitRatio: 0,
+      movementPulses: 0,
     }
   })
 
@@ -170,6 +171,10 @@ function Status() {
                 <div>
                   <h3 class="font-bold">Deficit (% of threshold)</h3>
                   <p>{(sensorStatus().elegoo.deficitRatio * 100).toFixed(1)}%</p>
+                </div>
+                <div>
+                  <h3 class="font-bold">Movement Pulses</h3>
+                  <p>{sensorStatus().elegoo.movementPulses}</p>
                 </div>
               </div>
             </div>

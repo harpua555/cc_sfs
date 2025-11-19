@@ -30,6 +30,9 @@ SettingsManager::SettingsManager()
     settings.expected_flow_window_ms  = 1500;
     settings.sdcp_loss_behavior       = 2;
     settings.dev_mode                 = false;
+    settings.verbose_logging          = false;
+    settings.keep_expected_forever    = false;
+    settings.flow_summary_logging     = false;
 }
 
 bool SettingsManager::load()
@@ -70,6 +73,14 @@ bool SettingsManager::load()
         doc.containsKey("sdcp_loss_behavior") ? doc["sdcp_loss_behavior"].as<int>() : 2;
     settings.dev_mode =
         doc.containsKey("dev_mode") ? doc["dev_mode"].as<bool>() : false;
+    settings.verbose_logging =
+        doc.containsKey("verbose_logging") ? doc["verbose_logging"].as<bool>() : false;
+    settings.keep_expected_forever = doc.containsKey("keep_expected_forever")
+                                         ? doc["keep_expected_forever"].as<bool>()
+                                         : false;
+    settings.flow_summary_logging = doc.containsKey("flow_summary_logging")
+                                        ? doc["flow_summary_logging"].as<bool>()
+                                        : false;
 
     isLoaded = true;
     return true;
@@ -173,6 +184,21 @@ bool SettingsManager::getDevMode()
     return getSettings().dev_mode;
 }
 
+bool SettingsManager::getVerboseLogging()
+{
+    return getSettings().verbose_logging;
+}
+
+bool SettingsManager::getKeepExpectedForever()
+{
+    return getSettings().keep_expected_forever;
+}
+
+bool SettingsManager::getFlowSummaryLogging()
+{
+    return getSettings().flow_summary_logging;
+}
+
 void SettingsManager::setSSID(const String &ssid)
 {
     if (!isLoaded)
@@ -269,6 +295,27 @@ void SettingsManager::setDevMode(bool devMode)
     settings.dev_mode = devMode;
 }
 
+void SettingsManager::setVerboseLogging(bool verbose)
+{
+    if (!isLoaded)
+        load();
+    settings.verbose_logging = verbose;
+}
+
+void SettingsManager::setKeepExpectedForever(bool keepAll)
+{
+    if (!isLoaded)
+        load();
+    settings.keep_expected_forever = keepAll;
+}
+
+void SettingsManager::setFlowSummaryLogging(bool enabled)
+{
+    if (!isLoaded)
+        load();
+    settings.flow_summary_logging = enabled;
+}
+
 String SettingsManager::toJson(bool includePassword)
 {
     String                   output;
@@ -283,8 +330,11 @@ String SettingsManager::toJson(bool includePassword)
     doc["has_connected"]       = settings.has_connected;
     doc["expected_deficit_mm"] = settings.expected_deficit_mm;
     doc["expected_flow_window_ms"] = settings.expected_flow_window_ms;
-    doc["sdcp_loss_behavior"] = settings.sdcp_loss_behavior;
-    doc["dev_mode"] = settings.dev_mode;
+    doc["sdcp_loss_behavior"]  = settings.sdcp_loss_behavior;
+    doc["dev_mode"]            = settings.dev_mode;
+    doc["verbose_logging"]     = settings.verbose_logging;
+    doc["keep_expected_forever"] = settings.keep_expected_forever;
+    doc["flow_summary_logging"]  = settings.flow_summary_logging;
 
     if (includePassword)
     {

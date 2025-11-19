@@ -97,6 +97,7 @@ typedef struct
     float               currentDeficitMm;
     float               deficitThresholdMm;
     float               deficitRatio;
+    unsigned long       movementPulseCount;
 } printer_info_t;
 
 class ElegooCC
@@ -139,6 +140,9 @@ class ElegooCC
 
     unsigned long startedAt;
     FilamentFlowTracker flowTracker;
+    unsigned long       movementPulseCount;
+    unsigned long       lastFlowLogMs;
+    unsigned long       lastSummaryLogMs;
 
     // Acknowledgment tracking
     bool          waitingForAck;

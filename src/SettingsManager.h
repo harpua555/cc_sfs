@@ -18,6 +18,9 @@ struct user_settings
     int    expected_flow_window_ms;
     int    sdcp_loss_behavior;
     bool   dev_mode;
+    bool   verbose_logging;
+    bool   keep_expected_forever;
+    bool   flow_summary_logging;
 };
 
 class SettingsManager
@@ -56,6 +59,9 @@ class SettingsManager
     int    getExpectedFlowWindowMs();
     int    getSdcpLossBehavior();
     bool   getDevMode();
+    bool   getVerboseLogging();
+    bool   getKeepExpectedForever();
+    bool   getFlowSummaryLogging();
 
     void setSSID(const String &ssid);
     void setPassword(const String &password);
@@ -69,6 +75,9 @@ class SettingsManager
     void setExpectedFlowWindowMs(int windowMs);
     void setSdcpLossBehavior(int behavior);
     void setDevMode(bool devMode);
+    void setVerboseLogging(bool verbose);
+    void setKeepExpectedForever(bool keepAll);
+    void setFlowSummaryLogging(bool enabled);
 
     String toJson(bool includePassword = true);
 };

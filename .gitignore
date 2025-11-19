@@ -6,6 +6,7 @@
 data/assets/
 data/index.htm
 data/index.htm.gz
+data/user_settings.secrets.json
 
 .DS_Store
 act/artifacts/

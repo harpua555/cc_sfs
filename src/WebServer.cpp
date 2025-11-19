@@ -58,6 +58,20 @@ void WebServer::begin()
             {
                 settingsManager.setDevMode(jsonObj["dev_mode"].as<bool>());
             }
+            if (jsonObj.containsKey("verbose_logging"))
+            {
+                settingsManager.setVerboseLogging(jsonObj["verbose_logging"].as<bool>());
+            }
+            if (jsonObj.containsKey("flow_summary_logging"))
+            {
+                settingsManager.setFlowSummaryLogging(
+                    jsonObj["flow_summary_logging"].as<bool>());
+            }
+            if (jsonObj.containsKey("keep_expected_forever"))
+            {
+                settingsManager.setKeepExpectedForever(
+                    jsonObj["keep_expected_forever"].as<bool>());
+            }
             settingsManager.save();
             jsonObj.clear();
             request->send(200, "text/plain", "ok");
@@ -119,6 +133,7 @@ void WebServer::begin()
                   jsonDoc["elegoo"]["currentDeficitMm"]     = elegooStatus.currentDeficitMm;
                   jsonDoc["elegoo"]["deficitThresholdMm"]   = elegooStatus.deficitThresholdMm;
                   jsonDoc["elegoo"]["deficitRatio"]         = elegooStatus.deficitRatio;
+                  jsonDoc["elegoo"]["movementPulses"]       = (uint32_t) elegooStatus.movementPulseCount;
 
                   String jsonResponse;
                   serializeJson(jsonDoc, jsonResponse);

@@ -52,11 +52,14 @@ ElegooCC::ElegooCC()
     expectedTelemetryAvailable = false;
     lastSuccessfulTelemetryMs  = 0;
     lastTelemetryReceiveMs     = 0;
-    lastStatusReceiveMs        = 0;
+    lastStatusReceiveMs          = 0;
     telemetryAvailableLastStatus = false;
     currentDeficitMm             = 0.0f;
     deficitThresholdMm           = 0.0f;
     deficitRatio                 = 0.0f;
+    movementPulseCount           = 0;
+    lastFlowLogMs                = 0;
+    lastSummaryLogMs             = 0;
     flowTracker.reset();
 
     waitingForAck       = false;
@@ -228,8 +231,17 @@ void ElegooCC::handleStatus(JsonDocument &doc)
         progress      = printInfo["Progress"];
         currentTicks  = printInfo["CurrentTicks"];
         totalTicks    = printInfo["TotalTicks"];
-        PrintSpeedPct = printInfo["PrintSpeedPct"];
+        PrintSpeedPct                = printInfo["PrintSpeedPct"];
         telemetryAvailableLastStatus = processFilamentTelemetry(printInfo, statusTimestamp);
+
+        if (settingsManager.getVerboseLogging())
+        {
+            logger.logf(
+                "Flow debug: SDCP status print=%d layer=%d/%d progress=%d expected=%.3fmm "
+                "delta=%.3fmm telemetry=%d",
+                (int) printStatus, currentLayer, totalLayer, progress, expectedFilamentMM,
+                lastExpectedDeltaMM, telemetryAvailableLastStatus ? 1 : 0);
+        }
     }
 
     // Store mainboard ID if we don't have it yet (I'm unsure if we actually need this)
@@ -251,6 +263,11 @@ void ElegooCC::resetFilamentTracking()
     lastSuccessfulTelemetryMs  = 0;
     filamentStopped            = false;
     lastTelemetryReceiveMs     = 0;
+    movementPulseCount         = 0;
+    currentDeficitMm           = 0.0f;
+    deficitThresholdMm         = 0.0f;
+    deficitRatio               = 0.0f;
+    lastFlowLogMs              = 0;
     flowTracker.reset();
 }
 
@@ -260,7 +277,10 @@ void ElegooCC::updateExpectedFilament(unsigned long currentTime)
         (currentTime - lastTelemetryReceiveMs) > EXPECTED_FILAMENT_STALE_MS)
     {
         expectedTelemetryAvailable = false;
-        flowTracker.reset();
+        if (!settingsManager.getKeepExpectedForever())
+        {
+            flowTracker.reset();
+        }
     }
 }
 
@@ -318,7 +338,16 @@ bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
             {
                 holdMs = EXPECTED_FILAMENT_STALE_MS;
             }
-            unsigned long pruneWindow = holdMs * 2;
+            unsigned long pruneWindow;
+            if (settingsManager.getKeepExpectedForever())
+            {
+                // Effectively disable time-based pruning for expected filament.
+                pruneWindow = 0xFFFFFFFFUL;
+            }
+            else
+            {
+                pruneWindow = holdMs * 2;
+            }
             flowTracker.addExpected(deltaValue, currentTime, pruneWindow);
         }
     }
@@ -443,7 +472,10 @@ void ElegooCC::loop()
         }
         else if (currentTime - lastPing > 29900)
         {
-            logger.log("Sending Ping");
+            if (settingsManager.getVerboseLogging())
+            {
+                logger.log("Sending Ping");
+            }
             // For all who venture to this line of code wondering why I didn't use sendPing(), it's
             // because for some reason that doesn't work. but this does!
             this->webSocket.sendTXT("ping");
@@ -481,15 +513,26 @@ void ElegooCC::checkFilamentRunout(unsigned long currentTime)
 
 void ElegooCC::checkFilamentMovement(unsigned long currentTime)
 {
-    int currentMovementValue = digitalRead(MOVEMENT_SENSOR_PIN);
+    int  currentMovementValue = digitalRead(MOVEMENT_SENSOR_PIN);
+    bool debugFlow            = settingsManager.getVerboseLogging();
+    bool summaryFlow          = settingsManager.getFlowSummaryLogging();
 
     // Track movement pulses so we know how much filament actually moved
     if (currentMovementValue != lastMovementValue)
     {
-        if (lastMovementValue != -1 && isPrinting())
+        if (lastMovementValue != -1)
         {
             actualFilamentMM += MOVEMENT_MM_PER_TOGGLE;
             flowTracker.addActual(MOVEMENT_MM_PER_TOGGLE);
+            movementPulseCount++;
+
+            if (debugFlow)
+            {
+                logger.logf("Flow debug: movement pulse (value %d -> %d), pulses=%lu, "
+                            "actual=%.3fmm",
+                            lastMovementValue, currentMovementValue, movementPulseCount,
+                            actualFilamentMM);
+            }
         }
 
         lastMovementValue = currentMovementValue;
@@ -511,9 +554,9 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
         return;
     }
 
-    float deficit               = 0;
-    bool  deficitTriggered      = false;
-    float threshold             = settingsManager.getExpectedDeficitMM();
+    float deficit          = 0;
+    bool  deficitTriggered = false;
+    float threshold        = settingsManager.getExpectedDeficitMM();
     if (threshold <= 0)
     {
         threshold = DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM;
@@ -523,7 +566,16 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     {
         holdMs = EXPECTED_FILAMENT_STALE_MS;
     }
-    unsigned long pruneWindow = holdMs * 2;
+    unsigned long pruneWindow;
+    if (settingsManager.getKeepExpectedForever())
+    {
+        // Effectively disable time-based pruning for expected filament.
+        pruneWindow = 0xFFFFFFFFUL;
+    }
+    else
+    {
+        pruneWindow = holdMs * 2;
+    }
 
     deficit = flowTracker.outstanding(currentTime, pruneWindow);
     if (deficit < 0)
@@ -538,6 +590,27 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     currentDeficitMm   = deficit;
     deficitThresholdMm = threshold;
     deficitRatio       = (threshold > 0.0f) ? (deficit / threshold) : 0.0f;
+
+    if (debugFlow && (currentTime - lastFlowLogMs) >= EXPECTED_FILAMENT_SAMPLE_MS)
+    {
+        lastFlowLogMs = currentTime;
+        logger.logf(
+            "Flow debug: cycle tele=%d expected=%.3fmm actual=%.3fmm deficit=%.3fmm "
+            "threshold=%.3fmm ratio=%.2f pulses=%lu",
+            expectedTelemetryAvailable ? 1 : 0, expectedFilamentMM, actualFilamentMM,
+            currentDeficitMm, deficitThresholdMm, deficitRatio, movementPulseCount);
+    }
+
+    // Optional condensed logging mode: one summary line per second, even when full
+    // verbose logging is disabled. Designed to make long-run debugging easier.
+    if (summaryFlow && !debugFlow && (currentTime - lastSummaryLogMs) >= 1000)
+    {
+        lastSummaryLogMs = currentTime;
+        logger.logf("Flow summary: tele=%d expected=%.3fmm actual=%.3fmm deficit=%.3fmm "
+                    "threshold=%.3fmm ratio=%.2f pulses=%lu",
+                    expectedTelemetryAvailable ? 1 : 0, expectedFilamentMM, actualFilamentMM,
+                    currentDeficitMm, deficitThresholdMm, deficitRatio, movementPulseCount);
+    }
 
     bool newFilamentStopped = deficitHoldSatisfied;
 
@@ -617,6 +690,13 @@ bool ElegooCC::shouldPausePrint(unsigned long currentTime)
     logger.logf("Time since print start %d", currentTime - startedAt);
     logger.logf("Is Machine status printing?: %d", hasMachineStatus(SDCP_MACHINE_STATUS_PRINTING));
     logger.logf("Print status: %d", printStatus);
+    if (settingsManager.getVerboseLogging())
+    {
+        logger.logf("Flow state: expected=%.3fmm actual=%.3fmm deficit=%.3fmm "
+                    "threshold=%.3fmm ratio=%.2f pulses=%lu",
+                    expectedFilamentMM, actualFilamentMM, currentDeficitMm,
+                    deficitThresholdMm, deficitRatio, movementPulseCount);
+    }
 
     return true;
 }
@@ -672,6 +752,7 @@ printer_info_t ElegooCC::getCurrentInformation()
     info.currentDeficitMm     = currentDeficitMm;
     info.deficitThresholdMm   = deficitThresholdMm;
     info.deficitRatio         = deficitRatio;
+    info.movementPulseCount   = movementPulseCount;
 
     return info;
 }
