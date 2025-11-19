@@ -16,6 +16,8 @@ struct user_settings
     int    start_print_timeout;
     bool   enabled;
     bool   has_connected;
+    float  expected_deficit_mm;
+    int    expected_flow_window_ms;
 };
 
 class SettingsManager
@@ -52,6 +54,8 @@ class SettingsManager
     int    getStartPrintTimeout();
     bool   getEnabled();
     bool   getHasConnected();
+    float  getExpectedDeficitMM();
+    int    getExpectedFlowWindowMs();
 
     void setSSID(const String &ssid);
     void setPassword(const String &password);
@@ -63,6 +67,8 @@ class SettingsManager
     void setStartPrintTimeout(int timeoutMs);
     void setEnabled(bool enabled);
     void setHasConnected(bool hasConnected);
+    void setExpectedDeficitMM(float value);
+    void setExpectedFlowWindowMs(int windowMs);
 
     String toJson(bool includePassword = true);
 };

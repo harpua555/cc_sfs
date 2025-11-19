@@ -6,6 +6,11 @@
 #include "SettingsManager.h"
 
 #define ACK_TIMEOUT_MS 5000
+constexpr float        MOVEMENT_MM_PER_TOGGLE               = 2.8f;
+constexpr float        DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM = 8.4f;  // ~3 SFS toggles
+constexpr unsigned int EXPECTED_FILAMENT_SAMPLE_MS   = 250;
+constexpr unsigned int EXPECTED_FILAMENT_STALE_MS    = 1000;
+constexpr float        PLACEHOLDER_EXPECTED_DELTA_MM = -1.0f;  // Replace once printer JSON is wired
 
 // External function to get current time (from main.cpp)
 extern unsigned long getTime();
@@ -33,6 +38,17 @@ ElegooCC::ElegooCC()
     filamentStopped   = false;
     filamentRunout    = false;
     lastPing          = 0;
+    expectedFilamentMM         = 0;
+    actualFilamentMM           = 0;
+    lastExpectedDeltaMM        = 0;
+    expectedTelemetryAvailable = false;
+    lastTelemetryRequestMs     = 0;
+    lastSuccessfulTelemetryMs  = 0;
+    expectedDeficitStartMs     = 0;
+    expectedFlowHead           = 0;
+    expectedFlowCount          = 0;
+    outstandingExpectedFlowMM  = 0;
+    lastExpectedSampleMs       = 0;
 
     waitingForAck       = false;
     pendingAckCommand   = -1;
@@ -187,10 +203,19 @@ void ElegooCC::handleStatus(JsonDocument &doc)
     {
         JsonObject          printInfo = status["PrintInfo"];
         sdcp_print_status_t newStatus = printInfo["Status"].as<sdcp_print_status_t>();
-        if (newStatus != printStatus && newStatus == SDCP_PRINT_STATUS_PRINTING)
+        if (newStatus != printStatus)
         {
-            logger.log("Print status changed to printing");
-            startedAt = millis();
+            if (newStatus == SDCP_PRINT_STATUS_PRINTING)
+            {
+                logger.log("Print status changed to printing");
+                startedAt = millis();
+                resetFilamentTracking();
+            }
+            else if (printStatus == SDCP_PRINT_STATUS_PRINTING)
+            {
+                logger.log("Print left printing state, resetting filament tracking");
+                resetFilamentTracking();
+            }
         }
         printStatus   = newStatus;
         currentLayer  = printInfo["CurrentLayer"];
@@ -207,6 +232,190 @@ void ElegooCC::handleStatus(JsonDocument &doc)
         mainboardID = mainboardId;
         logger.logf("Stored MainboardID: %s", mainboardID.c_str());
     }
+}
+
+void ElegooCC::resetFilamentTracking()
+{
+    lastMovementValue          = -1;
+    lastChangeTime             = millis();
+    actualFilamentMM           = 0;
+    expectedFilamentMM         = 0;
+    lastExpectedDeltaMM        = 0;
+    expectedTelemetryAvailable = false;
+    lastTelemetryRequestMs     = 0;
+    lastSuccessfulTelemetryMs  = 0;
+    filamentStopped            = false;
+    lastExpectedSampleMs       = 0;
+    expectedDeficitStartMs     = 0;
+    expectedFlowHead           = 0;
+    expectedFlowCount          = 0;
+    outstandingExpectedFlowMM  = 0;
+}
+
+void ElegooCC::updateExpectedFilament(unsigned long currentTime)
+{
+    if (!isPrinting())
+    {
+        expectedTelemetryAvailable = false;
+        return;
+    }
+
+    if ((currentTime - lastTelemetryRequestMs) < EXPECTED_FILAMENT_SAMPLE_MS)
+    {
+        if (expectedTelemetryAvailable &&
+            (currentTime - lastSuccessfulTelemetryMs) > EXPECTED_FILAMENT_STALE_MS)
+        {
+            expectedTelemetryAvailable = false;
+        }
+        return;
+    }
+
+    lastTelemetryRequestMs = currentTime;
+
+    FilamentTelemetry telemetry = fetchFilamentTelemetry();
+    if (!telemetry.hasData)
+    {
+        if (expectedTelemetryAvailable &&
+            (currentTime - lastSuccessfulTelemetryMs) > EXPECTED_FILAMENT_STALE_MS)
+        {
+            expectedTelemetryAvailable = false;
+        }
+        return;
+    }
+
+    expectedTelemetryAvailable = true;
+    lastSuccessfulTelemetryMs  = currentTime;
+    lastExpectedDeltaMM        = telemetry.deltaLast250ms;
+
+    if (telemetry.hasTotalField)
+    {
+        expectedFilamentMM = telemetry.totalThisPrint < 0 ? 0 : telemetry.totalThisPrint;
+    }
+    else
+    {
+        expectedFilamentMM += telemetry.deltaLast250ms;
+        if (expectedFilamentMM < 0)
+        {
+            expectedFilamentMM = 0;
+        }
+    }
+
+    enqueueExpectedFlow(telemetry.deltaLast250ms, currentTime);
+}
+
+ElegooCC::FilamentTelemetry ElegooCC::fetchFilamentTelemetry()
+{
+    FilamentTelemetry telemetry;
+    telemetry.hasData        = PLACEHOLDER_EXPECTED_DELTA_MM >= 0.0f;
+    telemetry.hasTotalField  = false;
+    telemetry.deltaLast250ms = telemetry.hasData ? PLACEHOLDER_EXPECTED_DELTA_MM : 0.0f;
+    telemetry.totalThisPrint = 0.0f;
+    // TODO: Replace placeholder with parsed JSON fields once the printer API call is integrated.
+    return telemetry;
+}
+
+void ElegooCC::enqueueExpectedFlow(float amount, unsigned long timestamp)
+{
+    if (amount <= 0)
+    {
+        return;
+    }
+
+    if (expectedFlowCount >= EXPECTED_FLOW_QUEUE_SIZE)
+    {
+        discardOldestExpectedFlow();
+    }
+
+    size_t index             = (expectedFlowHead + expectedFlowCount) % EXPECTED_FLOW_QUEUE_SIZE;
+    expectedFlowQueue[index] = {timestamp, amount};
+    if (expectedFlowCount < EXPECTED_FLOW_QUEUE_SIZE)
+    {
+        expectedFlowCount++;
+    }
+    outstandingExpectedFlowMM += amount;
+    lastExpectedSampleMs = timestamp;
+    pruneExpectedFlow(timestamp);
+}
+
+void ElegooCC::consumeActualFlow(float amount)
+{
+    float remaining = amount;
+    while (remaining > 0 && expectedFlowCount > 0)
+    {
+        ExpectedFlowChunk &chunk = expectedFlowQueue[expectedFlowHead];
+        float consume            = chunk.remaining < remaining ? chunk.remaining : remaining;
+        chunk.remaining -= consume;
+        remaining -= consume;
+        outstandingExpectedFlowMM -= consume;
+        if (chunk.remaining <= 0.0001f)
+        {
+            discardOldestExpectedFlow();
+        }
+    }
+
+    if (outstandingExpectedFlowMM < 0)
+    {
+        outstandingExpectedFlowMM = 0;
+    }
+}
+
+void ElegooCC::discardOldestExpectedFlow()
+{
+    if (expectedFlowCount == 0)
+    {
+        return;
+    }
+
+    outstandingExpectedFlowMM -= expectedFlowQueue[expectedFlowHead].remaining;
+    if (outstandingExpectedFlowMM < 0)
+    {
+        outstandingExpectedFlowMM = 0;
+    }
+
+    expectedFlowHead = (expectedFlowHead + 1) % EXPECTED_FLOW_QUEUE_SIZE;
+    if (expectedFlowCount > 0)
+    {
+        expectedFlowCount--;
+    }
+}
+
+void ElegooCC::pruneExpectedFlow(unsigned long currentTime)
+{
+    unsigned long holdMs = settingsManager.getExpectedFlowWindowMs();
+    if (holdMs == 0)
+    {
+        holdMs = EXPECTED_FILAMENT_STALE_MS;
+    }
+    unsigned long pruneMs = holdMs * 2;
+    if (pruneMs < holdMs)
+    {
+        pruneMs = holdMs;
+    }
+
+    while (expectedFlowCount > 0)
+    {
+        ExpectedFlowChunk &chunk = expectedFlowQueue[expectedFlowHead];
+        unsigned long      age
+            = currentTime >= chunk.timestamp ? currentTime - chunk.timestamp : 0;
+        if (age > pruneMs)
+        {
+            discardOldestExpectedFlow();
+        }
+        else
+        {
+            break;
+        }
+    }
+}
+
+float ElegooCC::getOutstandingExpectedFlow(unsigned long currentTime)
+{
+    pruneExpectedFlow(currentTime);
+    if (outstandingExpectedFlowMM < 0)
+    {
+        outstandingExpectedFlowMM = 0;
+    }
+    return outstandingExpectedFlowMM;
 }
 
 void ElegooCC::pausePrint()
@@ -313,6 +522,9 @@ void ElegooCC::loop()
         }
     }
 
+    // Update expected filament feed if the printer is reporting it
+    updateExpectedFilament(currentTime);
+
     // Before determining if we should pause, check if the filament is moving or it ran out
     checkFilamentMovement(currentTime);
     checkFilamentRunout(currentTime);
@@ -341,35 +553,97 @@ void ElegooCC::checkFilamentRunout(unsigned long currentTime)
 void ElegooCC::checkFilamentMovement(unsigned long currentTime)
 {
     int currentMovementValue = digitalRead(MOVEMENT_SENSOR_PIN);
+    bool expectationActive   = expectedTelemetryAvailable;
+    bool movementTimeoutHit  = false;
+
+    pruneExpectedFlow(currentTime);
 
     // CurrentLayer is unreliable when using Orcaslicer 2.3.0, because it is missing some g-code,so
     // we use Z instead. , assuming first layer is at Z offset <  0.1
     int movementTimeout =
         currentZ < 0.1 ? settingsManager.getFirstLayerTimeout() : settingsManager.getTimeout();
 
-    // Check if movement sensor value has changed, if the filament is moving, it should change every
-    // so often when it changes, reset the timeout
+    // Track movement pulses so we know how much filament actually moved
     if (currentMovementValue != lastMovementValue)
     {
-        if (filamentStopped)
+        if (lastMovementValue != -1 && isPrinting())
         {
-            logger.log("Filament movement started");
+            actualFilamentMM += MOVEMENT_MM_PER_TOGGLE;
+            consumeActualFlow(MOVEMENT_MM_PER_TOGGLE);
         }
-        // Value changed, reset timer and flag
+
         lastMovementValue = currentMovementValue;
         lastChangeTime    = currentTime;
-        filamentStopped   = false;
     }
     else
     {
-        // Value hasn't changed, check if timeout has elapsed
-        if ((currentTime - lastChangeTime) >= movementTimeout && !filamentStopped)
+        movementTimeoutHit = (currentTime - lastChangeTime) >= movementTimeout;
+    }
+
+    float deficit               = 0;
+    bool  deficitTriggered      = false;
+    bool  usedExpectedTelemetry = false;
+    float threshold             = settingsManager.getExpectedDeficitMM();
+    if (threshold <= 0)
+    {
+        threshold = DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM;
+    }
+    unsigned long holdMs = settingsManager.getExpectedFlowWindowMs();
+    if (holdMs == 0)
+    {
+        holdMs = EXPECTED_FILAMENT_STALE_MS;
+    }
+
+    if (expectationActive)
+    {
+        usedExpectedTelemetry = true;
+        deficit               = getOutstandingExpectedFlow(currentTime);
+        if (deficit < 0)
+        {
+            deficit = 0;
+        }
+        deficitTriggered = deficit >= threshold;
+    }
+
+    if (usedExpectedTelemetry && deficitTriggered)
+    {
+        if (expectedDeficitStartMs == 0)
+        {
+            expectedDeficitStartMs = currentTime;
+        }
+    }
+    else
+    {
+        expectedDeficitStartMs = 0;
+    }
+
+    bool deficitHoldSatisfied = usedExpectedTelemetry && expectedDeficitStartMs != 0 &&
+                                (currentTime - expectedDeficitStartMs) >= holdMs &&
+                                deficitTriggered;
+
+    bool newFilamentStopped = usedExpectedTelemetry ? deficitHoldSatisfied : movementTimeoutHit;
+
+    if (newFilamentStopped && !filamentStopped)
+    {
+        if (usedExpectedTelemetry && deficitTriggered)
+        {
+            logger.logf(
+                "Filament deficit detected (outstanding %.2fmm, threshold %.2fmm, hold %lums, last "
+                "delta %.2fmm)",
+                deficit, threshold, holdMs, lastExpectedDeltaMM);
+        }
+        else
         {
             logger.logf("Filament movement stopped, last movement detected %dms ago",
                         currentTime - lastChangeTime);
-            filamentStopped = true;  // Prevent repeated printing
         }
     }
+    else if (!newFilamentStopped && filamentStopped)
+    {
+        logger.log("Filament movement started");
+    }
+
+    filamentStopped = newFilamentStopped;
 }
 
 bool ElegooCC::shouldPausePrint(unsigned long currentTime)

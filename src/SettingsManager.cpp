@@ -28,6 +28,8 @@ SettingsManager::SettingsManager()
     settings.start_print_timeout = 10000;
     settings.enabled             = true;
     settings.has_connected       = false;
+    settings.expected_deficit_mm      = 8.4f;
+    settings.expected_flow_window_ms  = 1500;
 }
 
 bool SettingsManager::load()
@@ -61,6 +63,11 @@ bool SettingsManager::load()
     settings.enabled             = doc["enabled"] | true;
     settings.start_print_timeout = doc["start_print_timeout"] | 10000;
     settings.has_connected       = doc["has_connected"] | false;
+    settings.expected_deficit_mm =
+        doc.containsKey("expected_deficit_mm") ? doc["expected_deficit_mm"].as<float>() : 8.4f;
+    settings.expected_flow_window_ms =
+        doc.containsKey("expected_flow_window_ms") ? doc["expected_flow_window_ms"].as<int>()
+                                                   : 1500;
 
     isLoaded = true;
     return true;
@@ -154,6 +161,16 @@ bool SettingsManager::getHasConnected()
     return getSettings().has_connected;
 }
 
+float SettingsManager::getExpectedDeficitMM()
+{
+    return getSettings().expected_deficit_mm;
+}
+
+int SettingsManager::getExpectedFlowWindowMs()
+{
+    return getSettings().expected_flow_window_ms;
+}
+
 void SettingsManager::setSSID(const String &ssid)
 {
     if (!isLoaded)
@@ -236,6 +253,20 @@ void SettingsManager::setHasConnected(bool hasConnected)
     settings.has_connected = hasConnected;
 }
 
+void SettingsManager::setExpectedDeficitMM(float value)
+{
+    if (!isLoaded)
+        load();
+    settings.expected_deficit_mm = value;
+}
+
+void SettingsManager::setExpectedFlowWindowMs(int windowMs)
+{
+    if (!isLoaded)
+        load();
+    settings.expected_flow_window_ms = windowMs;
+}
+
 String SettingsManager::toJson(bool includePassword)
 {
     String                   output;
@@ -250,6 +281,8 @@ String SettingsManager::toJson(bool includePassword)
     doc["start_print_timeout"] = settings.start_print_timeout;
     doc["enabled"]             = settings.enabled;
     doc["has_connected"]       = settings.has_connected;
+    doc["expected_deficit_mm"] = settings.expected_deficit_mm;
+    doc["expected_flow_window_ms"] = settings.expected_flow_window_ms;
 
     if (includePassword)
     {

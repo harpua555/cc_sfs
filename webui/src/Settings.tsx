@@ -7,6 +7,8 @@ function Settings() {
   const [timeout, setTimeoutValue] = createSignal(2000)
   const [firstLayerTimeout, setFirstLayerTimeout] = createSignal(4000)
   const [startPrintTimeout, setStartPrintTimeout] = createSignal(10000)
+  const [expectedDeficit, setExpectedDeficit] = createSignal(8.4)
+  const [expectedWindow, setExpectedWindow] = createSignal(1500)
   const [loading, setLoading] = createSignal(true)
   const [error, setError] = createSignal('')
   const [saveSuccess, setSaveSuccess] = createSignal(false)
@@ -35,6 +37,8 @@ function Settings() {
       setApMode(settings.ap_mode || null)
       setPauseOnRunout(settings.pause_on_runout !== undefined ? settings.pause_on_runout : true)
       setEnabled(settings.enabled !== undefined ? settings.enabled : true)
+      setExpectedDeficit(settings.expected_deficit_mm !== undefined ? settings.expected_deficit_mm : 8.4)
+      setExpectedWindow(settings.expected_flow_window_ms !== undefined ? settings.expected_flow_window_ms : 1500)
 
       setError('')
     } catch (err: any) {
@@ -61,6 +65,8 @@ function Settings() {
         pause_on_runout: pauseOnRunout(),
         start_print_timeout: startPrintTimeout(),
         enabled: enabled(),
+        expected_deficit_mm: expectedDeficit(),
+        expected_flow_window_ms: expectedWindow(),
       }
 
       const response = await fetch('/update_settings', {
@@ -174,6 +180,36 @@ function Settings() {
               class="input"
             />
             <p class="label">Value in milliseconds between reading from the movement sensor</p>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Expected Flow Deficit Threshold (mm)</legend>
+            <input
+              type="number"
+              id="expectedDeficit"
+              value={expectedDeficit()}
+              onInput={(e) => setExpectedDeficit(parseFloat(e.target.value) || 0)}
+              min="0"
+              max="50"
+              step="0.1"
+              class="input"
+            />
+            <p class="label">How many millimeters of requested filament (based on printer telemetry) can accumulate without matching sensor movement before pausing. Higher values add tolerance, lower values catch jams faster.</p>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Expected Flow Window (ms)</legend>
+            <input
+              type="number"
+              id="expectedWindow"
+              value={expectedWindow()}
+              onInput={(e) => setExpectedWindow(parseInt(e.target.value) || 500)}
+              min="250"
+              max="5000"
+              step="250"
+              class="input"
+            />
+            <p class="label">How long to keep unmatched expected filament before it is ignored (anti-jitter). Increase if your printer reports large filament bursts, decrease for faster jam detection.</p>
           </fieldset>
 
           <fieldset class="fieldset">

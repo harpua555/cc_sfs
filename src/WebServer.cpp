@@ -43,6 +43,14 @@ void WebServer::begin()
             settingsManager.setPauseOnRunout(jsonObj["pause_on_runout"].as<bool>());
             settingsManager.setEnabled(jsonObj["enabled"].as<bool>());
             settingsManager.setStartPrintTimeout(jsonObj["start_print_timeout"].as<int>());
+            if (jsonObj.containsKey("expected_deficit_mm"))
+            {
+                settingsManager.setExpectedDeficitMM(jsonObj["expected_deficit_mm"].as<float>());
+            }
+            if (jsonObj.containsKey("expected_flow_window_ms"))
+            {
+                settingsManager.setExpectedFlowWindowMs(jsonObj["expected_flow_window_ms"].as<int>());
+            }
             settingsManager.save();
             jsonObj.clear();
             request->send(200, "text/plain", "ok");

@@ -94,6 +94,22 @@ typedef struct
 class ElegooCC
 {
    private:
+    struct FilamentTelemetry
+    {
+        bool  hasData;
+        bool  hasTotalField;
+        float deltaLast250ms;
+        float totalThisPrint;
+    };
+
+    struct ExpectedFlowChunk
+    {
+        unsigned long timestamp;
+        float         remaining;
+    };
+
+    static constexpr size_t EXPECTED_FLOW_QUEUE_SIZE = 16;
+
     WebSocketsClient webSocket;
     UUID             uuid;
 
@@ -117,6 +133,18 @@ class ElegooCC
     int                 PrintSpeedPct;
     bool                filamentStopped;
     bool                filamentRunout;
+    float               expectedFilamentMM;
+    float               actualFilamentMM;
+    float               lastExpectedDeltaMM;
+    bool                expectedTelemetryAvailable;
+    unsigned long       lastTelemetryRequestMs;
+    unsigned long       lastSuccessfulTelemetryMs;
+    unsigned long       expectedDeficitStartMs;
+    ExpectedFlowChunk   expectedFlowQueue[EXPECTED_FLOW_QUEUE_SIZE];
+    size_t              expectedFlowHead;
+    size_t              expectedFlowCount;
+    float               outstandingExpectedFlowMM;
+    unsigned long       lastExpectedSampleMs;
 
     unsigned long startedAt;
 
@@ -139,6 +167,15 @@ class ElegooCC
     void sendCommand(int command, bool waitForAck = false);
     void pausePrint();
     void continuePrint();
+
+    void resetFilamentTracking();
+    void updateExpectedFilament(unsigned long currentTime);
+    FilamentTelemetry fetchFilamentTelemetry();
+    void enqueueExpectedFlow(float amount, unsigned long timestamp);
+    void consumeActualFlow(float amount);
+    void discardOldestExpectedFlow();
+    void pruneExpectedFlow(unsigned long currentTime);
+    float getOutstandingExpectedFlow(unsigned long currentTime);
 
     // Helper methods for machine status bitmask
     bool hasMachineStatus(sdcp_machine_status_t status);
