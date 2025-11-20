@@ -72,6 +72,11 @@ void WebServer::begin()
                 settingsManager.setKeepExpectedForever(
                     jsonObj["keep_expected_forever"].as<bool>());
             }
+            if (jsonObj.containsKey("movement_mm_per_pulse"))
+            {
+                settingsManager.setMovementMmPerPulse(
+                    jsonObj["movement_mm_per_pulse"].as<float>());
+            }
             settingsManager.save();
             jsonObj.clear();
             request->send(200, "text/plain", "ok");
@@ -81,6 +86,7 @@ void WebServer::begin()
               [](AsyncWebServerRequest *request)
               {
                   String ip;
+                  // Use a 3s timeout for discovery via the ElegooCC helper.
                   if (!elegooCC.discoverPrinterIP(ip, 3000))
                   {
                       DynamicJsonDocument jsonDoc(128);
@@ -146,6 +152,14 @@ void WebServer::begin()
               {
                   String jsonResponse = logger.getLogsAsJson();
                   request->send(200, "application/json", jsonResponse);
+              });
+
+    // Raw text logs endpoint
+    server.on("/logs_text", HTTP_GET,
+              [](AsyncWebServerRequest *request)
+              {
+                  String textResponse = logger.getLogsAsText();
+                  request->send(200, "text/plain", textResponse);
               });
 
     // Version endpoint

@@ -12,6 +12,6 @@
   "sdcp_loss_behavior": 2,
   "dev_mode": false,
   "verbose_logging": false,
-  "keep_expected_forever": false,
-  "flow_summary_logging": false
+  "flow_summary_logging": false,
+  "movement_mm_per_pulse": 1.5
 }

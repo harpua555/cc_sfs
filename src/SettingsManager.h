@@ -21,6 +21,7 @@ struct user_settings
     bool   verbose_logging;
     bool   keep_expected_forever;
     bool   flow_summary_logging;
+    float  movement_mm_per_pulse;
 };
 
 class SettingsManager
@@ -62,6 +63,7 @@ class SettingsManager
     bool   getVerboseLogging();
     bool   getKeepExpectedForever();
     bool   getFlowSummaryLogging();
+    float  getMovementMmPerPulse();
 
     void setSSID(const String &ssid);
     void setPassword(const String &password);
@@ -78,6 +80,7 @@ class SettingsManager
     void setVerboseLogging(bool verbose);
     void setKeepExpectedForever(bool keepAll);
     void setFlowSummaryLogging(bool enabled);
+    void setMovementMmPerPulse(float mmPerPulse);
 
     String toJson(bool includePassword = true);
 };

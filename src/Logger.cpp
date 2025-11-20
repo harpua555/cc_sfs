@@ -59,7 +59,7 @@ void Logger::logf(const char *format, ...)
 
 String Logger::getLogsAsJson()
 {
-  DynamicJsonDocument jsonDoc(8192); // Allocate enough space for logs
+  DynamicJsonDocument jsonDoc(32768); // Allocate space for expanded log buffer
   JsonArray logsArray = jsonDoc.createNestedArray("logs");
 
   // If we have less than MAX_LOG_ENTRIES, start from 0
@@ -80,6 +80,28 @@ String Logger::getLogsAsJson()
   String jsonResponse;
   serializeJson(jsonDoc, jsonResponse);
   return jsonResponse;
+}
+
+String Logger::getLogsAsText()
+{
+  String result;
+
+  // If we have less than MAX_LOG_ENTRIES, start from 0
+  // Otherwise, start from currentIndex (oldest entry)
+  int startIndex = (totalEntries < MAX_LOG_ENTRIES) ? 0 : currentIndex;
+  int count      = totalEntries;
+
+  for (int i = 0; i < count; i++)
+  {
+    int bufferIndex = (startIndex + i) % MAX_LOG_ENTRIES;
+
+    result += String(logBuffer[bufferIndex].timestamp);
+    result += " ";
+    result += logBuffer[bufferIndex].message;
+    result += "\n";
+  }
+
+  return result;
 }
 
 void Logger::clearLogs()

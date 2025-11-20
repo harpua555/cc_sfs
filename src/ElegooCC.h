@@ -143,6 +143,10 @@ class ElegooCC
     unsigned long       movementPulseCount;
     unsigned long       lastFlowLogMs;
     unsigned long       lastSummaryLogMs;
+    // Jam / pause tracking
+    bool          jamPauseRequested;
+    bool          trackingFrozen;
+    bool          needDeficitResetOnPulse;
 
     // Acknowledgment tracking
     bool          waitingForAck;

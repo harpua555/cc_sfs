@@ -106,6 +106,14 @@ The current firmware uses **extrusion telemetry from the printer (SDCP)** togeth
 
 Setting the deficit threshold too low may cause false positives on noisy prints; setting it too high may let jams run longer before being caught. The recommended approach is to start slightly conservative (lower threshold, shorter window), test on a simple print, and adjust upward until you no longer see spurious pauses.
 
+In the **current firmware**, outstanding expected filament (the backlog) only decreases when:
+
+- Pulses are seen from the SFS (actual filament movement).
+- SDCP reports negative extrusion deltas (retractions/rewinds).
+- The print leaves the printing state, which resets tracking.
+
+There is no time-based decay of the backlog; `Expected Flow Window (ms)` now acts purely as the **hold time** that the backlog must remain above the threshold before a jam is considered real.
+
 ## 3D printed case/adapter
 
 The files are available in [models](/models) directory or on [MakerWorld](https://makerworld.com/en/models/1594174-carbon-centauri-x-bigtreetech-sfs-2-0-mod)

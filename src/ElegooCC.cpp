@@ -9,7 +9,6 @@
 #include "SettingsManager.h"
 
 #define ACK_TIMEOUT_MS 5000
-constexpr float        MOVEMENT_MM_PER_TOGGLE                = 2.8f;
 constexpr float        DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM = 8.4f;
 constexpr unsigned int EXPECTED_FILAMENT_SAMPLE_MS           = 250;
 constexpr unsigned int EXPECTED_FILAMENT_STALE_MS            = 1000;
@@ -18,7 +17,9 @@ constexpr unsigned int PAUSE_REARM_DELAY_MS                  = 3000;
 static const char*     TOTAL_EXTRUSION_HEX_KEY       = "54 6F 74 61 6C 45 78 74 72 75 73 69 6F 6E 00";
 static const char*     CURRENT_EXTRUSION_HEX_KEY =
     "43 75 72 72 65 6E 74 45 78 74 72 75 73 69 6F 6E 00";
-static const uint16_t  SDCP_DISCOVERY_PORT = 30000;
+// UDP discovery port used by the Elegoo SDCP implementation (matches the
+// Home Assistant integration and printer firmware).
+static const uint16_t  SDCP_DISCOVERY_PORT = 3000;
 
 // External function to get current time (from main.cpp)
 extern unsigned long getTime();
@@ -60,6 +61,9 @@ ElegooCC::ElegooCC()
     movementPulseCount           = 0;
     lastFlowLogMs                = 0;
     lastSummaryLogMs             = 0;
+    jamPauseRequested            = false;
+    trackingFrozen               = false;
+    needDeficitResetOnPulse      = false;
     flowTracker.reset();
 
     waitingForAck       = false;
@@ -218,11 +222,63 @@ void ElegooCC::handleStatus(JsonDocument &doc)
         sdcp_print_status_t newStatus = printInfo["Status"].as<sdcp_print_status_t>();
         if (newStatus != printStatus)
         {
-            if (newStatus == SDCP_PRINT_STATUS_PRINTING)
+            bool wasPrinting   = (printStatus == SDCP_PRINT_STATUS_PRINTING);
+            bool isPrintingNow = (newStatus == SDCP_PRINT_STATUS_PRINTING);
+
+            if (isPrintingNow)
             {
-                logger.log("Print status changed to printing");
-                startedAt = millis();
-                resetFilamentTracking();
+                // Transition into PRINTING.
+                if (printStatus == SDCP_PRINT_STATUS_PAUSED ||
+                    printStatus == SDCP_PRINT_STATUS_PAUSING)
+                {
+                    // Resume from a paused state: keep accumulated totals, but
+                    // allow tracking to continue. If we previously paused due
+                    // to a jam, clear the jam state on the first movement.
+                    logger.log("Print status changed to printing (resume)");
+                    trackingFrozen = false;
+                    if (jamPauseRequested)
+                    {
+                        needDeficitResetOnPulse = true;
+                        filamentStopped         = false;
+                    }
+                }
+                else
+                {
+                    // Treat all other transitions into PRINTING as a new print.
+                    logger.log("Print status changed to printing");
+                    startedAt = millis();
+                    resetFilamentTracking();
+                }
+            }
+            else if (wasPrinting)
+            {
+                // Transition out of PRINTING.
+                if (newStatus == SDCP_PRINT_STATUS_PAUSED ||
+                    newStatus == SDCP_PRINT_STATUS_PAUSING)
+                {
+                    // Printer has entered a paused state. If we requested the
+                    // pause due to a filament jam, freeze tracking so the
+                    // displayed values stay at the moment of pause.
+                    logger.log("Print status changed to paused");
+                    if (jamPauseRequested)
+                    {
+                        trackingFrozen = true;
+                        logger.log("Freezing filament tracking while paused after jam");
+                    }
+                }
+                else
+                {
+                    // Print has ended (stopped/completed/etc). Log a summary and
+                    // fully reset tracking for the next job.
+                    logger.logf(
+                        "Print summary: status=%d progress=%d layer=%d/%d ticks=%d/%d "
+                        "expected=%.2fmm actual=%.2fmm deficit=%.2fmm pulses=%lu",
+                        (int) newStatus, progress, currentLayer, totalLayer, currentTicks,
+                        totalTicks, expectedFilamentMM, actualFilamentMM, currentDeficitMm,
+                        movementPulseCount);
+                    logger.log("Print left printing state, resetting filament tracking");
+                    resetFilamentTracking();
+                }
             }
         }
         printStatus   = newStatus;
@@ -237,8 +293,8 @@ void ElegooCC::handleStatus(JsonDocument &doc)
         if (settingsManager.getVerboseLogging())
         {
             logger.logf(
-                "Flow debug: SDCP status print=%d layer=%d/%d progress=%d expected=%.3fmm "
-                "delta=%.3fmm telemetry=%d",
+                "Flow debug: SDCP status print=%d layer=%d/%d progress=%d expected=%.2fmm "
+                "delta=%.2fmm telemetry=%d",
                 (int) printStatus, currentLayer, totalLayer, progress, expectedFilamentMM,
                 lastExpectedDeltaMM, telemetryAvailableLastStatus ? 1 : 0);
         }
@@ -268,19 +324,28 @@ void ElegooCC::resetFilamentTracking()
     deficitThresholdMm         = 0.0f;
     deficitRatio               = 0.0f;
     lastFlowLogMs              = 0;
+    jamPauseRequested          = false;
+    trackingFrozen             = false;
+    needDeficitResetOnPulse    = false;
     flowTracker.reset();
 }
 
 void ElegooCC::updateExpectedFilament(unsigned long currentTime)
 {
+    if (trackingFrozen)
+    {
+        // While tracking is frozen (printer paused after a jam), keep the
+        // last-known deficit/telemetry state intact.
+        return;
+    }
+
     if (expectedTelemetryAvailable &&
         (currentTime - lastTelemetryReceiveMs) > EXPECTED_FILAMENT_STALE_MS)
     {
+        // Telemetry is stale; stop treating it as available so we don't
+        // derive new movement-only decisions from it, but keep the existing
+        // outstanding deficit intact for debugging.
         expectedTelemetryAvailable = false;
-        if (!settingsManager.getKeepExpectedForever())
-        {
-            flowTracker.reset();
-        }
     }
 }
 
@@ -320,8 +385,8 @@ bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
 
     telemetryAvailableLastStatus = true;
     expectedTelemetryAvailable   = true;
-    lastSuccessfulTelemetryMs  = currentTime;
-    lastTelemetryReceiveMs     = currentTime;
+    lastSuccessfulTelemetryMs    = currentTime;
+    lastTelemetryReceiveMs       = currentTime;
 
     if (hasTotal)
     {
@@ -333,22 +398,15 @@ bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
         lastExpectedDeltaMM = deltaValue;
         if (deltaValue > 0)
         {
-            unsigned long holdMs = settingsManager.getExpectedFlowWindowMs();
-            if (holdMs == 0)
-            {
-                holdMs = EXPECTED_FILAMENT_STALE_MS;
-            }
-            unsigned long pruneWindow;
-            if (settingsManager.getKeepExpectedForever())
-            {
-                // Effectively disable time-based pruning for expected filament.
-                pruneWindow = 0xFFFFFFFFUL;
-            }
-            else
-            {
-                pruneWindow = holdMs * 2;
-            }
-            flowTracker.addExpected(deltaValue, currentTime, pruneWindow);
+            // Positive SDCP delta: add to outstanding expected filament.
+            flowTracker.addExpected(deltaValue, currentTime, 0);
+        }
+        else if (deltaValue < 0)
+        {
+            // Negative SDCP delta (e.g., retraction or rewind): treat as
+            // reducing outstanding expectation without requiring sensor
+            // pulses to "pay it back".
+            flowTracker.addActual(-deltaValue);
         }
     }
 
@@ -363,6 +421,9 @@ void ElegooCC::pausePrint()
         logger.log("Dev mode is enabled: pausePrint suppressed (would send pause command)");
         return;
     }
+    jamPauseRequested   = true;
+    trackingFrozen      = false;
+    needDeficitResetOnPulse = false;
     lastPauseRequestMs = millis();
     sendCommand(SDCP_COMMAND_PAUSE_PRINT, true);
 }
@@ -402,7 +463,9 @@ void ElegooCC::sendCommand(int command, bool waitForAck)
     data["RequestID"]   = uuidStr;
     data["MainboardID"] = mainboardID;
     data["TimeStamp"]   = timestamp;
-    data["From"]        = 2;  // 0: OctoEverywhere, 1: web client, 2: this device
+    // Match the Home Assistant integration's client identity for SDCP commands.
+    // From = 0 is used there and is known to work reliably for pause/stop.
+    data["From"] = 0;
 
     // Explicit empty Data object (matches existing payload structure)
     data.createNestedObject("Data");
@@ -416,6 +479,15 @@ void ElegooCC::sendCommand(int command, bool waitForAck)
         {
             currentStatus.add(s);
         }
+    }
+
+    // When we know the MainboardID, include a Topic field that matches the
+    // "sdcp/request/<MainboardID>" pattern used by the Elegoo HA integration.
+    if (!mainboardID.isEmpty())
+    {
+        String topic = "sdcp/request/";
+        topic += mainboardID;
+        doc["Topic"] = topic;
     }
 
     String jsonPayload;
@@ -513,6 +585,19 @@ void ElegooCC::checkFilamentRunout(unsigned long currentTime)
 
 void ElegooCC::checkFilamentMovement(unsigned long currentTime)
 {
+    if (trackingFrozen)
+    {
+        // When tracking is frozen (printer paused after a jam), leave the
+        // computed deficit and totals unchanged until the job is resumed.
+        int currentMovementValue = digitalRead(MOVEMENT_SENSOR_PIN);
+        if (currentMovementValue != lastMovementValue)
+        {
+            lastMovementValue = currentMovementValue;
+            lastChangeTime    = currentTime;
+        }
+        return;
+    }
+
     int  currentMovementValue = digitalRead(MOVEMENT_SENSOR_PIN);
     bool debugFlow            = settingsManager.getVerboseLogging();
     bool summaryFlow          = settingsManager.getFlowSummaryLogging();
@@ -520,16 +605,32 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     // Track movement pulses so we know how much filament actually moved
     if (currentMovementValue != lastMovementValue)
     {
-        if (lastMovementValue != -1)
+        if (lastMovementValue != -1 && isPrinting())
         {
-            actualFilamentMM += MOVEMENT_MM_PER_TOGGLE;
-            flowTracker.addActual(MOVEMENT_MM_PER_TOGGLE);
+            if (needDeficitResetOnPulse)
+            {
+                logger.log("Resetting filament deficit on first movement after resume");
+                flowTracker.reset();
+                currentDeficitMm        = 0.0f;
+                deficitRatio            = 0.0f;
+                needDeficitResetOnPulse = false;
+                jamPauseRequested       = false;
+                filamentStopped         = false;
+            }
+
+            float movementMm = settingsManager.getMovementMmPerPulse();
+            if (movementMm <= 0.0f)
+            {
+                movementMm = 1.5f;
+            }
+            actualFilamentMM += movementMm;
+            flowTracker.addActual(movementMm);
             movementPulseCount++;
 
             if (debugFlow)
             {
                 logger.logf("Flow debug: movement pulse (value %d -> %d), pulses=%lu, "
-                            "actual=%.3fmm",
+                            "actual=%.2fmm",
                             lastMovementValue, currentMovementValue, movementPulseCount,
                             actualFilamentMM);
             }
@@ -566,18 +667,10 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     {
         holdMs = EXPECTED_FILAMENT_STALE_MS;
     }
-    unsigned long pruneWindow;
-    if (settingsManager.getKeepExpectedForever())
-    {
-        // Effectively disable time-based pruning for expected filament.
-        pruneWindow = 0xFFFFFFFFUL;
-    }
-    else
-    {
-        pruneWindow = holdMs * 2;
-    }
-
-    deficit = flowTracker.outstanding(currentTime, pruneWindow);
+    // Time-based pruning of expected filament is disabled; only sensor
+    // pulses, negative SDCP deltas, or explicit print resets can reduce
+    // the outstanding deficit.
+    deficit = flowTracker.outstanding(currentTime, 0);
     if (deficit < 0)
     {
         deficit = 0;
@@ -595,8 +688,8 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     {
         lastFlowLogMs = currentTime;
         logger.logf(
-            "Flow debug: cycle tele=%d expected=%.3fmm actual=%.3fmm deficit=%.3fmm "
-            "threshold=%.3fmm ratio=%.2f pulses=%lu",
+            "Flow debug: cycle tele=%d expected=%.2fmm actual=%.2fmm deficit=%.2fmm "
+            "threshold=%.2fmm ratio=%.2f pulses=%lu",
             expectedTelemetryAvailable ? 1 : 0, expectedFilamentMM, actualFilamentMM,
             currentDeficitMm, deficitThresholdMm, deficitRatio, movementPulseCount);
     }
@@ -606,8 +699,8 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     if (summaryFlow && !debugFlow && (currentTime - lastSummaryLogMs) >= 1000)
     {
         lastSummaryLogMs = currentTime;
-        logger.logf("Flow summary: tele=%d expected=%.3fmm actual=%.3fmm deficit=%.3fmm "
-                    "threshold=%.3fmm ratio=%.2f pulses=%lu",
+        logger.logf("Flow summary: tele=%d expected=%.2fmm actual=%.2fmm deficit=%.2fmm "
+                    "threshold=%.2fmm ratio=%.2f pulses=%lu",
                     expectedTelemetryAvailable ? 1 : 0, expectedFilamentMM, actualFilamentMM,
                     currentDeficitMm, deficitThresholdMm, deficitRatio, movementPulseCount);
     }
@@ -676,7 +769,7 @@ bool ElegooCC::shouldPausePrint(unsigned long currentTime)
 
     if (currentTime - startedAt < settingsManager.getStartPrintTimeout() ||
         !webSocket.isConnected() || waitingForAck || !isPrinting() ||
-        (totalTicks - currentTicks) < 100 || !pauseCondition ||
+        !pauseCondition ||
         (lastPauseRequestMs != 0 && (currentTime - lastPauseRequestMs) < PAUSE_REARM_DELAY_MS))
     {
         return false;
@@ -692,8 +785,8 @@ bool ElegooCC::shouldPausePrint(unsigned long currentTime)
     logger.logf("Print status: %d", printStatus);
     if (settingsManager.getVerboseLogging())
     {
-        logger.logf("Flow state: expected=%.3fmm actual=%.3fmm deficit=%.3fmm "
-                    "threshold=%.3fmm ratio=%.2f pulses=%lu",
+        logger.logf("Flow state: expected=%.2fmm actual=%.2fmm deficit=%.2fmm "
+                    "threshold=%.2fmm ratio=%.2f pulses=%lu",
                     expectedFilamentMM, actualFilamentMM, currentDeficitMm,
                     deficitThresholdMm, deficitRatio, movementPulseCount);
     }

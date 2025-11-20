@@ -33,6 +33,7 @@ SettingsManager::SettingsManager()
     settings.verbose_logging          = false;
     settings.keep_expected_forever    = false;
     settings.flow_summary_logging     = false;
+    settings.movement_mm_per_pulse    = 1.5f;
 }
 
 bool SettingsManager::load()
@@ -81,6 +82,9 @@ bool SettingsManager::load()
     settings.flow_summary_logging = doc.containsKey("flow_summary_logging")
                                         ? doc["flow_summary_logging"].as<bool>()
                                         : false;
+    settings.movement_mm_per_pulse = doc.containsKey("movement_mm_per_pulse")
+                                         ? doc["movement_mm_per_pulse"].as<float>()
+                                         : 1.5f;
 
     isLoaded = true;
     return true;
@@ -197,6 +201,11 @@ bool SettingsManager::getKeepExpectedForever()
 bool SettingsManager::getFlowSummaryLogging()
 {
     return getSettings().flow_summary_logging;
+}
+
+float SettingsManager::getMovementMmPerPulse()
+{
+    return getSettings().movement_mm_per_pulse;
 }
 
 void SettingsManager::setSSID(const String &ssid)
@@ -316,6 +325,13 @@ void SettingsManager::setFlowSummaryLogging(bool enabled)
     settings.flow_summary_logging = enabled;
 }
 
+void SettingsManager::setMovementMmPerPulse(float mmPerPulse)
+{
+    if (!isLoaded)
+        load();
+    settings.movement_mm_per_pulse = mmPerPulse;
+}
+
 String SettingsManager::toJson(bool includePassword)
 {
     String                   output;
@@ -335,6 +351,7 @@ String SettingsManager::toJson(bool includePassword)
     doc["verbose_logging"]     = settings.verbose_logging;
     doc["keep_expected_forever"] = settings.keep_expected_forever;
     doc["flow_summary_logging"]  = settings.flow_summary_logging;
+    doc["movement_mm_per_pulse"] = settings.movement_mm_per_pulse;
 
     if (includePassword)
     {

@@ -11,7 +11,7 @@
   "expected_flow_window_ms": 1500,
   "sdcp_loss_behavior": 2,
   "dev_mode": true,
-  "verbose_logging": true,
+  "verbose_logging": false,
   "keep_expected_forever": true,
-  "flow_summary_logging": true
+  "flow_summary_logging": false
 }

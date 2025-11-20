@@ -16,10 +16,10 @@ function Settings() {
   const [sdcpLossBehavior, setSdcpLossBehavior] = createSignal(2);
   const [devMode, setDevMode] = createSignal(false);
   const [verboseLogging, setVerboseLogging] = createSignal(false);
-  const [keepExpectedForever, setKeepExpectedForever] = createSignal(false);
   const [flowSummaryLogging, setFlowSummaryLogging] = createSignal(false);
   const [discovering, setDiscovering] = createSignal(false);
   const [discoverSuccess, setDiscoverSuccess] = createSignal(false);
+  const [movementPerPulse, setMovementPerPulse] = createSignal(1.5)
   // Load settings from the server and scan for WiFi networks
   onMount(async () => {
     try {
@@ -45,8 +45,8 @@ function Settings() {
       setSdcpLossBehavior(settings.sdcp_loss_behavior !== undefined ? settings.sdcp_loss_behavior : 2)
       setDevMode(settings.dev_mode !== undefined ? settings.dev_mode : false)
       setVerboseLogging(settings.verbose_logging !== undefined ? settings.verbose_logging : false)
-      setKeepExpectedForever(settings.keep_expected_forever !== undefined ? settings.keep_expected_forever : false)
       setFlowSummaryLogging(settings.flow_summary_logging !== undefined ? settings.flow_summary_logging : false)
+      setMovementPerPulse(settings.movement_mm_per_pulse !== undefined ? settings.movement_mm_per_pulse : 1.5)
 
       setError('')
     } catch (err: any) {
@@ -76,8 +76,8 @@ function Settings() {
         sdcp_loss_behavior: sdcpLossBehavior(),
         dev_mode: devMode(),
         verbose_logging: verboseLogging(),
-        keep_expected_forever: keepExpectedForever(),
         flow_summary_logging: flowSummaryLogging(),
+        movement_mm_per_pulse: movementPerPulse(),
       }
 
       const response = await fetch('/update_settings', {
@@ -112,9 +112,13 @@ function Settings() {
       const result = await response.json()
       if (result.elegooip) {
         setElegooip(result.elegooip)
+        setDiscoverSuccess(true)
+        setTimeout(() => setDiscoverSuccess(false), 3000)
+      } else if (result.error) {
+        setError(result.error)
+      } else {
+        setError('Discovery did not return a printer IP.')
       }
-      setDiscoverSuccess(true)
-      setTimeout(() => setDiscoverSuccess(false), 3000)
     } catch (err: any) {
       setError(`Error discovering printer: ${err.message || 'Unknown error'}`)
       console.error('Failed to discover printer:', err)
@@ -212,14 +216,18 @@ function Settings() {
             <input
               type="number"
               id="expectedDeficit"
-              value={expectedDeficit()}
+              value={expectedDeficit().toFixed(2)}
               onInput={(e) => setExpectedDeficit(parseFloat(e.target.value) || 0)}
               min="0"
               max="50"
               step="0.1"
               class="input"
             />
-            <p class="label">How many millimeters of requested filament (based on printer telemetry) can accumulate without matching sensor movement before pausing. Higher values add tolerance, lower values catch jams faster.</p>
+            <p class="label">
+              How many millimeters of requested filament backlog (based on printer telemetry) are permitted to accumulate without matching sensor movement before a jam is considered.
+              <br />
+              Higher values add tolerance, lower values catch jams faster.
+            </p>
           </fieldset>
 
           <fieldset class="fieldset">
@@ -234,21 +242,26 @@ function Settings() {
               step="250"
               class="input"
             />
-            <p class="label">How long to keep unmatched expected filament before it is ignored (anti-jitter). Increase if your printer reports large filament bursts, decrease for faster jam detection.</p>
+            <p class="label">
+              How long the filament deficit must remain above the threshold (hold time) before a jam is triggered. Increase to require a longer stall before pausing; decrease for a faster response.
+            </p>
           </fieldset>
 
           <fieldset class="fieldset">
-            <legend class="fieldset-legend">Keep Expected Filament Forever</legend>
-            <label class="label cursor-pointer">
-              <input
-                type="checkbox"
-                id="keepExpectedForever"
-                checked={keepExpectedForever()}
-                onChange={(e) => setKeepExpectedForever(e.target.checked)}
-                class="checkbox checkbox-accent"
-              />
-              <span class="label-text">When enabled, expected filament from SDCP is never pruned based on time; any requested filament remains outstanding until matched by sensor movement or overwritten by new telemetry.</span>
-            </label>
+            <legend class="fieldset-legend">Filament Movement per Pulse (mm)</legend>
+            <input
+              type="number"
+              id="movementPerPulse"
+              value={movementPerPulse().toFixed(2)}
+              onInput={(e) => setMovementPerPulse(parseFloat(e.target.value) || 0)}
+              min="0.1"
+              max="10"
+              step="0.01"
+              class="input"
+            />
+            <p class="label">
+              How many millimeters of filament correspond to a single SFS sensor pulse (edge). Adjust this to calibrate actual filament movement against your physical measurements.
+            </p>
           </fieldset>
 
           <fieldset class="fieldset">

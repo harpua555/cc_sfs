@@ -112,16 +112,16 @@ function Status() {
               <h2 class="card-title">More Information</h2>
               <div class="text-sm flex gap-4 flex-wrap">
                 <div>
-                  <h3 class="font-bold">Mainboard ID</h3>
-                  <p>{sensorStatus().elegoo.mainboardID}</p>
-                </div>
-                <div>
                   <h3 class="font-bold">Currently Printing</h3>
                   <p>{sensorStatus().elegoo.isPrinting ? 'Yes' : 'No'}</p>
                 </div>
                 <div>
                   <h3 class="font-bold">Print Status</h3>
                   <p>{PRINT_STATUS_MAP[sensorStatus().elegoo.printStatus as keyof typeof PRINT_STATUS_MAP]}</p>
+                </div>
+                <div>
+                  <h3 class="font-bold">Telemetry Available</h3>
+                  <p>{sensorStatus().elegoo.telemetryAvailable ? 'Yes' : 'No'}</p>
                 </div>
 
                 <div>
@@ -144,33 +144,27 @@ function Status() {
                   <h3 class="font-bold">Total Ticks</h3>
                   <p>{sensorStatus().elegoo.totalTicks}</p>
                 </div>
-              <div>
-                  <h3 class="font-bold">Print Speed</h3>
-                  <p>{sensorStatus().elegoo.PrintSpeedPct}</p>
-                </div>
-                <div>
-                  <h3 class="font-bold">Telemetry Available</h3>
-                  <p>{sensorStatus().elegoo.telemetryAvailable ? 'Yes' : 'No'}</p>
-                </div>
+
+                {/* Second row: flow metrics */}
                 <div>
                   <h3 class="font-bold">Expected Filament (mm)</h3>
-                  <p>{sensorStatus().elegoo.expectedFilament}</p>
+                  <p>{sensorStatus().elegoo.expectedFilament?.toFixed?.(2) ?? sensorStatus().elegoo.expectedFilament}</p>
                 </div>
                 <div>
                   <h3 class="font-bold">Actual Filament (mm)</h3>
-                  <p>{sensorStatus().elegoo.actualFilament}</p>
+                  <p>{sensorStatus().elegoo.actualFilament?.toFixed?.(2) ?? sensorStatus().elegoo.actualFilament}</p>
                 </div>
                 <div>
                   <h3 class="font-bold">Last Expected Delta (mm)</h3>
-                  <p>{sensorStatus().elegoo.expectedDelta}</p>
+                  <p>{sensorStatus().elegoo.expectedDelta?.toFixed?.(2) ?? sensorStatus().elegoo.expectedDelta}</p>
                 </div>
                 <div>
                   <h3 class="font-bold">Deficit (mm)</h3>
-                  <p>{sensorStatus().elegoo.currentDeficitMm?.toFixed?.(3) ?? sensorStatus().elegoo.currentDeficitMm}</p>
+                  <p>{sensorStatus().elegoo.currentDeficitMm?.toFixed?.(2) ?? sensorStatus().elegoo.currentDeficitMm}</p>
                 </div>
                 <div>
                   <h3 class="font-bold">Deficit (% of threshold)</h3>
-                  <p>{(sensorStatus().elegoo.deficitRatio * 100).toFixed(1)}%</p>
+                  <p>{(sensorStatus().elegoo.deficitRatio * 100).toFixed(2)}%</p>
                 </div>
                 <div>
                   <h3 class="font-bold">Movement Pulses</h3>

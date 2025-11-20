@@ -15,7 +15,7 @@ struct LogEntry
 class Logger
 {
 private:
-  static const int MAX_LOG_ENTRIES = 50;
+  static const int MAX_LOG_ENTRIES = 200;
   LogEntry logBuffer[MAX_LOG_ENTRIES];
   int currentIndex;
   int totalEntries;
@@ -35,6 +35,7 @@ public:
   void log(const char *message);
   void logf(const char *format, ...);
   String getLogsAsJson();
+  String getLogsAsText();
   void clearLogs();
   int getLogCount();
 };

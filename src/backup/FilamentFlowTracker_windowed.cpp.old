@@ -1,4 +1,10 @@
-#include "FilamentFlowTracker.h"
+#include "../FilamentFlowTracker.h"
+
+// Archived implementation that performed time-based pruning of expected
+// filament using a sliding window. Kept for reference / potential future
+// tuning; the live firmware now uses a simpler model where outstanding
+// expected filament only decreases due to sensor pulses, negative SDCP
+// deltas, or explicit print resets.
 
 FilamentFlowTracker::FilamentFlowTracker()
 {
@@ -22,19 +28,15 @@ void FilamentFlowTracker::reset()
 void FilamentFlowTracker::addExpected(float amount, unsigned long timestamp,
                                       unsigned long pruneWindowMs)
 {
-    (void) pruneWindowMs;
-
     if (amount <= 0)
     {
         return;
     }
 
+    prune(timestamp, pruneWindowMs);
     if (count >= MAX_CHUNKS)
     {
-        // Coalesce by discarding the oldest chunk without changing the
-        // outstanding total. This keeps the buffer bounded without
-        // artificially reducing the tracked deficit.
-        discardOldest(false);
+        discardOldest();
     }
 
     size_t index            = (head + count) % MAX_CHUNKS;
@@ -72,8 +74,7 @@ void FilamentFlowTracker::addActual(float amount)
 
 float FilamentFlowTracker::outstanding(unsigned long now, unsigned long pruneWindowMs)
 {
-    (void) now;
-    (void) pruneWindowMs;
+    prune(now, pruneWindowMs);
     if (outstandingMm < 0)
     {
         outstandingMm = 0;
@@ -143,9 +144,23 @@ void FilamentFlowTracker::discardOldest(bool adjustOutstanding)
 
 void FilamentFlowTracker::prune(unsigned long now, unsigned long pruneWindowMs)
 {
-    (void) now;
-    (void) pruneWindowMs;
-    // Time-based pruning of expected filament has been disabled in the
-    // live firmware. Outstanding expected flow only decreases in response
-    // to sensor pulses, negative SDCP deltas, or explicit print resets.
+    if (pruneWindowMs == 0)
+    {
+        return;
+    }
+
+    while (count > 0)
+    {
+        unsigned long age =
+            now >= chunks[head].timestamp ? now - chunks[head].timestamp : 0;
+        if (age > pruneWindowMs)
+        {
+            discardOldest();
+        }
+        else
+        {
+            break;
+        }
+    }
 }
+
