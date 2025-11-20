@@ -63,7 +63,15 @@ ElegooCC::ElegooCC()
     lastSummaryLogMs             = 0;
     jamPauseRequested            = false;
     trackingFrozen               = false;
-    needDeficitResetOnPulse      = false;
+    aggregatedOutstandingMm      = 0.0f;
+    aggregatedDeficitActive      = false;
+    aggregatedDeficitStartMs     = 0;
+    aggregatedDeltaPositiveSum   = 0.0f;
+    aggregatedDeltaNetSum        = 0.0f;
+    aggregatedTotalBaselineMm    = 0.0f;
+    aggregatedPulseDeductMm      = 0.0f;
+    aggregatedTotalBaselineValid = false;
+    lastTotalExtrusionValue      = 0.0f;
     flowTracker.reset();
 
     waitingForAck       = false;
@@ -184,7 +192,8 @@ void ElegooCC::handleStatus(JsonDocument &doc)
     String     mainboardId = doc["MainboardID"];
     unsigned long statusTimestamp = millis();
     lastStatusReceiveMs          = statusTimestamp;
-
+    bool useTotalBacklogMode = settingsManager.getUseTotalExtrusionBacklog();
+    bool useDeltaBacklog     = settingsManager.getUseTotalExtrusionDeficit();
     // Parse current status (which contains machine status array)
     if (status.containsKey("CurrentStatus"))
     {
@@ -252,6 +261,22 @@ void ElegooCC::handleStatus(JsonDocument &doc)
                     deficitRatio            = 0.0f;
                     jamPauseRequested       = false;
                     filamentStopped         = false;
+                    if (useTotalBacklogMode)
+                    {
+                        resetTotalBacklog(expectedFilamentMM);
+                        if (settingsManager.getZeroDeficitLogging())
+                        {
+                            logger.log("Deficit reset to 0.00mm (resume after jam)");
+                        }
+                    }
+                    else if (useDeltaBacklog)
+                    {
+                        clearAggregatedBacklog();
+                        if (settingsManager.getZeroDeficitLogging())
+                        {
+                            logger.log("Deficit reset to 0.00mm (resume after jam)");
+                        }
+                    }
                 }
                 else
                 {
@@ -340,11 +365,11 @@ void ElegooCC::resetFilamentTracking()
     lastFlowLogMs              = 0;
     jamPauseRequested          = false;
     trackingFrozen             = false;
-    needDeficitResetOnPulse    = false;
     if (settingsManager.getZeroDeficitLogging())
     {
         logger.log("Deficit reset to 0.00mm (tracking reset)");
     }
+    clearAggregatedBacklog();
     flowTracker.reset();
 }
 
@@ -399,10 +424,15 @@ bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
                                             totalValue);
     bool  hasDelta   = tryReadExtrusionValue(printInfo, "CurrentExtrusion",
                                             CURRENT_EXTRUSION_HEX_KEY, deltaValue);
+    bool  useTotalBacklogMode = settingsManager.getUseTotalExtrusionBacklog();
+    bool  useDeltaBacklog     = settingsManager.getUseTotalExtrusionDeficit();
+    bool  usingDeltaLogic     = useDeltaBacklog && !useTotalBacklogMode;
+    bool  packetFlowLogging   = settingsManager.getPacketFlowLogging();
 
     if (hasTotal)
     {
         expectedFilamentMM = totalValue < 0 ? 0 : totalValue;
+        lastTotalExtrusionValue = expectedFilamentMM;
     }
 
     if (hasDelta)
@@ -410,16 +440,37 @@ bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
         lastExpectedDeltaMM = deltaValue;
         if (deltaValue > 0)
         {
-            // Positive SDCP delta: add to outstanding expected filament.
+            if (usingDeltaLogic)
+            {
+                aggregatedOutstandingMm += deltaValue;
+            }
+            aggregatedDeltaPositiveSum += deltaValue;
+            aggregatedDeltaNetSum += deltaValue;
             flowTracker.addExpected(deltaValue, currentTime, 0);
         }
         else if (deltaValue < 0)
         {
-            // Negative SDCP delta (e.g., retraction or rewind): treat as
-            // reducing outstanding expectation without requiring sensor
-            // pulses to "pay it back".
+            if (usingDeltaLogic)
+            {
+                aggregatedOutstandingMm += deltaValue;
+                if (aggregatedOutstandingMm < 0.0f)
+                {
+                    aggregatedOutstandingMm = 0.0f;
+                }
+            }
             flowTracker.addActual(-deltaValue);
+            aggregatedDeltaNetSum += deltaValue;
         }
+    }
+
+    if (useTotalBacklogMode && hasTotal)
+    {
+        if (!aggregatedTotalBaselineValid)
+        {
+            aggregatedTotalBaselineMm    = totalValue;
+            aggregatedTotalBaselineValid = true;
+        }
+        recalculateTotalBacklog();
     }
 
     // Track freshness of extrusion telemetry separately from general SDCP
@@ -430,6 +481,21 @@ bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
     {
         expectedTelemetryAvailable = true;
         lastTelemetryReceiveMs     = currentTime;
+        if (packetFlowLogging)
+        {
+            logger.logf(
+                "Packet log: time=%lu total=%.2f delta=%.2f delta_pos=%.2f delta_net=%.2f aggregated=%.2f pulses=%lu telem=%d",
+                currentTime, expectedFilamentMM, deltaValue, aggregatedDeltaPositiveSum,
+                aggregatedDeltaNetSum, aggregatedOutstandingMm, movementPulseCount,
+                expectedTelemetryAvailable ? 1 : 0);
+        }
+        if (settingsManager.getTotalVsDeltaLogging() && hasTotal)
+        {
+            logger.logf("Telemetry compare: total=%.2f delta_pos=%.2f delta_net=%.2f "
+                        "aggregated=%.2f pulses=%lu",
+                        expectedFilamentMM, aggregatedDeltaPositiveSum, aggregatedDeltaNetSum,
+                        aggregatedOutstandingMm, movementPulseCount);
+        }
     }
 
     return true;
@@ -445,7 +511,6 @@ void ElegooCC::pausePrint()
     }
     jamPauseRequested   = true;
     trackingFrozen      = false;
-    needDeficitResetOnPulse = false;
     lastPauseRequestMs = millis();
     sendCommand(SDCP_COMMAND_PAUSE_PRINT, true);
 }
@@ -623,6 +688,10 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     int  currentMovementValue = digitalRead(MOVEMENT_SENSOR_PIN);
     bool debugFlow            = settingsManager.getVerboseLogging();
     bool summaryFlow          = settingsManager.getFlowSummaryLogging();
+    bool useTotalBacklogMode  = settingsManager.getUseTotalExtrusionBacklog();
+    bool useDeltaBacklog      = settingsManager.getUseTotalExtrusionDeficit();
+    bool usingDeltaLogic      = useDeltaBacklog && !useTotalBacklogMode;
+    bool currentlyPrinting    = isPrinting();
 
     // Track movement pulses so we know how much filament actually moved
     if (currentMovementValue != lastMovementValue)
@@ -633,6 +702,19 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
             if (movementMm <= 0.0f)
             {
                 movementMm = 1.5f;
+            }
+            if (useTotalBacklogMode)
+            {
+                aggregatedPulseDeductMm += movementMm;
+                recalculateTotalBacklog();
+            }
+            else if (usingDeltaLogic)
+            {
+                aggregatedOutstandingMm -= movementMm;
+                if (aggregatedOutstandingMm < 0.0f)
+                {
+                    aggregatedOutstandingMm = 0.0f;
+                }
             }
             actualFilamentMM += movementMm;
             flowTracker.addActual(movementMm);
@@ -661,46 +743,46 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
         return;
     }
 
-    float deficit          = 0;
-    bool  deficitTriggered = false;
-    float threshold        = settingsManager.getExpectedDeficitMM();
-    if (threshold <= 0)
-    {
-        threshold = DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM;
-    }
-    unsigned long holdMs = settingsManager.getExpectedFlowWindowMs();
-    if (holdMs == 0)
-    {
-        holdMs = EXPECTED_FILAMENT_STALE_MS;
-    }
-    // Time-based pruning of expected filament is disabled; only sensor
-    // pulses, negative SDCP deltas, or explicit print resets can reduce
-    // the outstanding deficit.
-    deficit = flowTracker.outstanding(currentTime, 0);
+      float deficit          = 0;
+      bool  deficitTriggered = false;
+      float threshold        = settingsManager.getExpectedDeficitMM();
+      if (threshold <= 0)
+      {
+          threshold = DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM;
+      }
+      unsigned long holdMs = settingsManager.getExpectedFlowWindowMs();
+      if (holdMs == 0)
+      {
+          holdMs = EXPECTED_FILAMENT_STALE_MS;
+      }
+      // Time-based pruning of expected filament is disabled; only sensor
+      // pulses, negative SDCP deltas, or explicit print resets can reduce
+      // the outstanding deficit.
+      bool aggregatedMode = useTotalBacklogMode || usingDeltaLogic;
+      if (aggregatedMode)
+      {
+          deficit = aggregatedOutstandingMm;
+      }
+      else
+      {
+          deficit = flowTracker.outstanding(currentTime, 0);
+      }
     if (deficit < 0)
     {
         deficit = 0;
     }
     deficitTriggered = deficit >= threshold;
 
-    bool deficitHoldSatisfied =
-        flowTracker.deficitSatisfied(deficit, currentTime, threshold, holdMs);
-
-    // After a jam-driven pause, when the printer resumes printing we wait
-    // for the first movement pulse to explicitly reset the deficit. Until
-    // that pulse arrives, suppress any further jam detection so we don't
-    // immediately re-pause based on the old backlog.
-    if (needDeficitResetOnPulse && isPrinting())
-    {
-        deficitTriggered     = false;
-        deficitHoldSatisfied = false;
-    }
+      bool deficitHoldSatisfied =
+          aggregatedMode
+              ? aggregatedDeficitSatisfied(deficit, currentTime, threshold, holdMs)
+              : flowTracker.deficitSatisfied(deficit, currentTime, threshold, holdMs);
 
     currentDeficitMm   = deficit;
     deficitThresholdMm = threshold;
     deficitRatio       = (threshold > 0.0f) ? (deficit / threshold) : 0.0f;
 
-    if (debugFlow && (currentTime - lastFlowLogMs) >= EXPECTED_FILAMENT_SAMPLE_MS)
+    if (debugFlow && currentlyPrinting && (currentTime - lastFlowLogMs) >= EXPECTED_FILAMENT_SAMPLE_MS)
     {
         lastFlowLogMs = currentTime;
         logger.logf(
@@ -712,7 +794,7 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
 
     // Optional condensed logging mode: one summary line per second, even when full
     // verbose logging is disabled. Designed to make long-run debugging easier.
-    if (summaryFlow && !debugFlow && (currentTime - lastSummaryLogMs) >= 1000)
+    if (summaryFlow && currentlyPrinting && !debugFlow && (currentTime - lastSummaryLogMs) >= 1000)
     {
         lastSummaryLogMs = currentTime;
         logger.logf("Flow summary: tele=%d expected=%.2fmm actual=%.2fmm deficit=%.2fmm "
@@ -753,8 +835,8 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
 
     if (!jamPauseRequested && !trackingFrozen)
     {
-        filamentStopped = newFilamentStopped;
-    }
+    filamentStopped = newFilamentStopped;
+}
 }
 
 bool ElegooCC::shouldPausePrint(unsigned long currentTime)
@@ -875,6 +957,81 @@ printer_info_t ElegooCC::getCurrentInformation()
     info.movementPulseCount   = movementPulseCount;
 
     return info;
+}
+
+void ElegooCC::clearAggregatedBacklog()
+{
+    aggregatedOutstandingMm = 0.0f;
+    aggregatedDeficitActive = false;
+    aggregatedDeficitStartMs = 0;
+    aggregatedDeltaPositiveSum = 0.0f;
+    aggregatedDeltaNetSum      = 0.0f;
+    aggregatedTotalBaselineMm  = 0.0f;
+    aggregatedTotalBaselineValid = false;
+    aggregatedPulseDeductMm      = 0.0f;
+}
+
+void ElegooCC::resetTotalBacklog(float totalValue)
+{
+    aggregatedTotalBaselineMm    = totalValue;
+    aggregatedTotalBaselineValid = true;
+    aggregatedPulseDeductMm      = 0.0f;
+    aggregatedOutstandingMm      = 0.0f;
+    lastTotalExtrusionValue      = totalValue;
+}
+
+void ElegooCC::recalculateTotalBacklog()
+{
+    if (!aggregatedTotalBaselineValid)
+    {
+        return;
+    }
+    float requested = lastTotalExtrusionValue - aggregatedTotalBaselineMm;
+    if (requested < 0.0f)
+    {
+        requested = 0.0f;
+    }
+    if (aggregatedPulseDeductMm > requested)
+    {
+        aggregatedPulseDeductMm = requested;
+    }
+    aggregatedOutstandingMm = requested - aggregatedPulseDeductMm;
+    if (aggregatedOutstandingMm < 0.0f)
+    {
+        aggregatedOutstandingMm = 0.0f;
+    }
+}
+
+bool ElegooCC::aggregatedDeficitSatisfied(float outstandingValue, unsigned long now,
+                                          float threshold, unsigned long holdWindowMs)
+{
+    if (threshold <= 0 || holdWindowMs == 0)
+    {
+        aggregatedDeficitActive = false;
+        aggregatedDeficitStartMs = 0;
+        return false;
+    }
+
+    if (outstandingValue >= threshold)
+    {
+        if (!aggregatedDeficitActive)
+        {
+            aggregatedDeficitActive  = true;
+            aggregatedDeficitStartMs = now;
+        }
+    }
+    else
+    {
+        aggregatedDeficitActive  = false;
+        aggregatedDeficitStartMs = 0;
+    }
+
+    if (!aggregatedDeficitActive)
+    {
+        return false;
+    }
+
+    return (now - aggregatedDeficitStartMs) >= holdWindowMs;
 }
 
 bool ElegooCC::discoverPrinterIP(String &outIp, unsigned long timeoutMs)

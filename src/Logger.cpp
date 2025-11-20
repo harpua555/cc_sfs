@@ -14,7 +14,23 @@ Logger::Logger()
 {
   currentIndex = 0;
   totalEntries = 0;
+  logCapacity = MAX_LOG_ENTRIES;
   uuidGenerator.generate();
+  logBuffer = new (std::nothrow) LogEntry[logCapacity];
+  if (!logBuffer)
+  {
+    logCapacity = FALLBACK_LOG_ENTRIES;
+    logBuffer  = new (std::nothrow) LogEntry[logCapacity];
+    if (!logBuffer)
+    {
+      logCapacity = 0;
+    }
+  }
+}
+
+Logger::~Logger()
+{
+  delete[] logBuffer;
 }
 
 void Logger::log(const String &message)
@@ -29,14 +45,19 @@ void Logger::log(const String &message)
   // Get current timestamp
   unsigned long timestamp = getTime();
 
+  if (logCapacity == 0 || logBuffer == nullptr)
+  {
+    return;
+  }
+
   // Store in circular buffer
   logBuffer[currentIndex].uuid = uuid;
   logBuffer[currentIndex].timestamp = timestamp;
   logBuffer[currentIndex].message = message;
 
   // Update indices
-  currentIndex = (currentIndex + 1) % MAX_LOG_ENTRIES;
-  if (totalEntries < MAX_LOG_ENTRIES)
+  currentIndex = (currentIndex + 1) % logCapacity;
+  if (totalEntries < logCapacity)
   {
     totalEntries++;
   }
@@ -62,9 +83,16 @@ String Logger::getLogsAsJson()
   DynamicJsonDocument jsonDoc(32768); // Allocate space for expanded log buffer
   JsonArray logsArray = jsonDoc.createNestedArray("logs");
 
+  if (logCapacity == 0 || logBuffer == nullptr)
+  {
+    String jsonResponse;
+    serializeJson(jsonDoc, jsonResponse);
+    return jsonResponse;
+  }
+
   // If we have less than MAX_LOG_ENTRIES, start from 0
   // Otherwise, start from currentIndex (oldest entry)
-  int startIndex = (totalEntries < MAX_LOG_ENTRIES) ? 0 : currentIndex;
+  int startIndex = (totalEntries < logCapacity) ? 0 : currentIndex;
   int count = totalEntries;
 
   for (int i = 0; i < count; i++)
@@ -86,9 +114,14 @@ String Logger::getLogsAsText()
 {
   String result;
 
+  if (logCapacity == 0 || logBuffer == nullptr)
+  {
+    return result;
+  }
+
   // If we have less than MAX_LOG_ENTRIES, start from 0
   // Otherwise, start from currentIndex (oldest entry)
-  int startIndex = (totalEntries < MAX_LOG_ENTRIES) ? 0 : currentIndex;
+  int startIndex = (totalEntries < logCapacity) ? 0 : currentIndex;
   int count      = totalEntries;
 
   for (int i = 0; i < count; i++)
@@ -108,8 +141,12 @@ void Logger::clearLogs()
 {
   currentIndex = 0;
   totalEntries = 0;
+  if (logCapacity == 0 || logBuffer == nullptr)
+  {
+    return;
+  }
   // Clear the buffer
-  for (int i = 0; i < MAX_LOG_ENTRIES; i++)
+  for (int i = 0; i < logCapacity; i++)
   {
     logBuffer[i].uuid = "";
     logBuffer[i].timestamp = 0;

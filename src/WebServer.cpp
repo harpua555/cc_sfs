@@ -69,6 +69,26 @@ void WebServer::begin()
                 settingsManager.setZeroDeficitLogging(
                     jsonObj["zero_deficit_logging"].as<bool>());
             }
+            if (jsonObj.containsKey("use_total_extrusion_deficit"))
+            {
+                settingsManager.setUseTotalExtrusionDeficit(
+                    jsonObj["use_total_extrusion_deficit"].as<bool>());
+            }
+            if (jsonObj.containsKey("total_vs_delta_logging"))
+            {
+                settingsManager.setTotalVsDeltaLogging(
+                    jsonObj["total_vs_delta_logging"].as<bool>());
+            }
+            if (jsonObj.containsKey("packet_flow_logging"))
+            {
+                settingsManager.setPacketFlowLogging(
+                    jsonObj["packet_flow_logging"].as<bool>());
+            }
+            if (jsonObj.containsKey("use_total_extrusion_backlog"))
+            {
+                settingsManager.setUseTotalExtrusionBacklog(
+                    jsonObj["use_total_extrusion_backlog"].as<bool>());
+            }
             if (jsonObj.containsKey("dev_mode"))
             {
                 settingsManager.setDevMode(jsonObj["dev_mode"].as<bool>());
@@ -171,7 +191,10 @@ void WebServer::begin()
               [](AsyncWebServerRequest *request)
               {
                   String textResponse = logger.getLogsAsText();
-                  request->send(200, "text/plain", textResponse);
+                  AsyncWebServerResponse *response =
+                      request->beginResponse(200, "text/plain", textResponse);
+                  response->addHeader("Content-Disposition", "attachment; filename=\"logs.txt\"");
+                  request->send(response);
               });
 
     // Version endpoint

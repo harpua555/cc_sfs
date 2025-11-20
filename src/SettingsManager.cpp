@@ -31,8 +31,12 @@ SettingsManager::SettingsManager()
     settings.sdcp_loss_behavior       = 2;
     settings.flow_telemetry_stale_ms  = 1000;
     settings.ui_refresh_interval_ms   = 1000;
-    settings.zero_deficit_logging     = false;
-    settings.dev_mode                 = false;
+    settings.zero_deficit_logging           = false;
+    settings.use_total_extrusion_deficit    = false;
+    settings.total_vs_delta_logging         = false;
+    settings.packet_flow_logging            = false;
+    settings.use_total_extrusion_backlog    = false;
+    settings.dev_mode                       = false;
     settings.verbose_logging          = false;
     settings.flow_summary_logging     = false;
     settings.movement_mm_per_pulse    = 1.5f;
@@ -85,6 +89,22 @@ bool SettingsManager::load()
     settings.zero_deficit_logging =
         doc.containsKey("zero_deficit_logging")
             ? doc["zero_deficit_logging"].as<bool>()
+            : false;
+    settings.use_total_extrusion_deficit =
+        doc.containsKey("use_total_extrusion_deficit")
+            ? doc["use_total_extrusion_deficit"].as<bool>()
+            : false;
+    settings.total_vs_delta_logging =
+        doc.containsKey("total_vs_delta_logging")
+            ? doc["total_vs_delta_logging"].as<bool>()
+            : false;
+    settings.packet_flow_logging =
+        doc.containsKey("packet_flow_logging")
+            ? doc["packet_flow_logging"].as<bool>()
+            : false;
+    settings.use_total_extrusion_backlog =
+        doc.containsKey("use_total_extrusion_backlog")
+            ? doc["use_total_extrusion_backlog"].as<bool>()
             : false;
     settings.dev_mode =
         doc.containsKey("dev_mode") ? doc["dev_mode"].as<bool>() : false;
@@ -208,6 +228,25 @@ int SettingsManager::getUiRefreshIntervalMs()
 bool SettingsManager::getZeroDeficitLogging()
 {
     return getSettings().zero_deficit_logging;
+}
+
+bool SettingsManager::getUseTotalExtrusionDeficit()
+{
+    return getSettings().use_total_extrusion_deficit;
+}
+
+bool SettingsManager::getTotalVsDeltaLogging()
+{
+    return getSettings().total_vs_delta_logging;
+}
+
+bool SettingsManager::getPacketFlowLogging()
+{
+    return getSettings().packet_flow_logging;
+}
+bool SettingsManager::getUseTotalExtrusionBacklog()
+{
+    return getSettings().use_total_extrusion_backlog;
 }
 bool SettingsManager::getDevMode()
 {
@@ -339,6 +378,33 @@ void SettingsManager::setZeroDeficitLogging(bool enabled)
     settings.zero_deficit_logging = enabled;
 }
 
+void SettingsManager::setUseTotalExtrusionDeficit(bool enabled)
+{
+    if (!isLoaded)
+        load();
+    settings.use_total_extrusion_deficit = enabled;
+}
+
+void SettingsManager::setTotalVsDeltaLogging(bool enabled)
+{
+    if (!isLoaded)
+        load();
+    settings.total_vs_delta_logging = enabled;
+}
+
+void SettingsManager::setPacketFlowLogging(bool enabled)
+{
+    if (!isLoaded)
+        load();
+    settings.packet_flow_logging = enabled;
+}
+void SettingsManager::setUseTotalExtrusionBacklog(bool enabled)
+{
+    if (!isLoaded)
+        load();
+    settings.use_total_extrusion_backlog = enabled;
+}
+
 void SettingsManager::setDevMode(bool devMode)
 {
     if (!isLoaded)
@@ -385,6 +451,10 @@ String SettingsManager::toJson(bool includePassword)
     doc["flow_telemetry_stale_ms"] = settings.flow_telemetry_stale_ms;
     doc["ui_refresh_interval_ms"]  = settings.ui_refresh_interval_ms;
     doc["zero_deficit_logging"]    = settings.zero_deficit_logging;
+    doc["use_total_extrusion_deficit"] = settings.use_total_extrusion_deficit;
+    doc["total_vs_delta_logging"] = settings.total_vs_delta_logging;
+    doc["packet_flow_logging"] = settings.packet_flow_logging;
+    doc["use_total_extrusion_backlog"] = settings.use_total_extrusion_backlog;
     doc["dev_mode"]              = settings.dev_mode;
     doc["verbose_logging"]       = settings.verbose_logging;
     doc["flow_summary_logging"]  = settings.flow_summary_logging;

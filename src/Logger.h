@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <UUID.h>
+#include <new>
 
 struct LogEntry
 {
@@ -15,8 +16,10 @@ struct LogEntry
 class Logger
 {
 private:
-  static const int MAX_LOG_ENTRIES = 200;
-  LogEntry logBuffer[MAX_LOG_ENTRIES];
+  static const int MAX_LOG_ENTRIES = 20000;
+  static const int FALLBACK_LOG_ENTRIES = 4096;
+  LogEntry *logBuffer;
+  int logCapacity;
   int currentIndex;
   int totalEntries;
   UUID uuidGenerator;
@@ -30,6 +33,8 @@ private:
 public:
   // Singleton access method
   static Logger &getInstance();
+
+  ~Logger();
 
   void log(const String &message);
   void log(const char *message);

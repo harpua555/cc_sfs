@@ -25,32 +25,30 @@ function Logs() {
 
   const fetchLogs = async () => {
     try {
-      const response = await fetch('/api/logs')
+      const response = await fetch('/api/logs_text')
       if (!response.ok) {
         throw new Error(`Failed to fetch logs: ${response.status} ${response.statusText}`)
       }
-      const logData = await response.json() as {
-        logs: LogEntry[]
-      }
+      const text = await response.text()
+      const parsedLogs = text
+        .split('\n')
+        .map((line, index) => {
+          const trimmed = line.trim()
+          if (!trimmed) return null
+          const firstSpace = trimmed.indexOf(' ')
+          if (firstSpace < 0) {
+            return { uuid: `${index}-${trimmed}`, timestamp: 0, message: trimmed } as LogEntry
+          }
+          const ts = parseInt(trimmed.slice(0, firstSpace), 10)
+          return {
+            uuid: `${ts}-${index}-${trimmed.slice(firstSpace + 1)}`,
+            timestamp: isNaN(ts) ? 0 : ts,
+            message: trimmed.slice(firstSpace + 1)
+          } as LogEntry
+        })
+        .filter((entry): entry is LogEntry => entry !== null)
 
-      const existingUuids = new Set(logs().map(log => log.uuid))
-
-      const parsedLogs: LogEntry[] = []
-      for (const line of logData.logs) {
-        if (!existingUuids.has(line.uuid)) {
-          parsedLogs.push(line)
-          existingUuids.add(line.uuid)
-        }
-      }
-
-      if (parsedLogs.length > 0) {
-        // Add new logs to existing logs and sort by timestamp (newest first)
-        const allLogs = [...logs(), ...parsedLogs].sort((a, b) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        )
-        setLogs(allLogs)
-      }
-
+      setLogs(parsedLogs)
       setError('')
       setLoading(false)
     } catch (err: any) {
@@ -139,8 +137,11 @@ function Logs() {
         </div>
       )}
 
-      <div class="mt-4 text-sm text-base-content/70">
+      <div class="mt-4 flex items-center justify-between flex-wrap gap-2 text-sm text-base-content/70">
         <p>Logs are automatically refreshed every 5 seconds.</p>
+        <a class="btn btn-xs btn-outline btn-primary" href="/api/logs_text" download="sfs-logs.txt">
+          Download full log
+        </a>
       </div>
     </div>
   )

@@ -20,6 +20,10 @@ struct user_settings
     int    flow_telemetry_stale_ms;
     int    ui_refresh_interval_ms;
     bool   zero_deficit_logging;
+    bool   use_total_extrusion_deficit;
+    bool   total_vs_delta_logging;
+    bool   packet_flow_logging;
+    bool   use_total_extrusion_backlog;
     bool   dev_mode;
     bool   verbose_logging;
     bool   flow_summary_logging;
@@ -64,6 +68,10 @@ class SettingsManager
     int    getFlowTelemetryStaleMs();
     int    getUiRefreshIntervalMs();
     bool   getZeroDeficitLogging();
+    bool   getUseTotalExtrusionDeficit();
+    bool   getTotalVsDeltaLogging();
+    bool   getPacketFlowLogging();
+    bool   getUseTotalExtrusionBacklog();
     bool   getDevMode();
     bool   getVerboseLogging();
     bool   getFlowSummaryLogging();
@@ -83,6 +91,10 @@ class SettingsManager
     void setFlowTelemetryStaleMs(int staleMs);
     void setUiRefreshIntervalMs(int intervalMs);
     void setZeroDeficitLogging(bool enabled);
+    void setUseTotalExtrusionDeficit(bool enabled);
+    void setTotalVsDeltaLogging(bool enabled);
+    void setPacketFlowLogging(bool enabled);
+    void setUseTotalExtrusionBacklog(bool enabled);
     void setDevMode(bool devMode);
     void setVerboseLogging(bool verbose);
     void setFlowSummaryLogging(bool enabled);

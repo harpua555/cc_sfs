@@ -143,10 +143,18 @@ class ElegooCC
     unsigned long       movementPulseCount;
     unsigned long       lastFlowLogMs;
     unsigned long       lastSummaryLogMs;
+    float               aggregatedOutstandingMm;
+    bool                aggregatedDeficitActive;
+    unsigned long       aggregatedDeficitStartMs;
+    float               aggregatedDeltaPositiveSum;
+    float               aggregatedDeltaNetSum;
+    float               aggregatedTotalBaselineMm;
+    float               aggregatedPulseDeductMm;
+    bool                aggregatedTotalBaselineValid;
+    float               lastTotalExtrusionValue;
     // Jam / pause tracking
     bool          jamPauseRequested;
     bool          trackingFrozen;
-    bool          needDeficitResetOnPulse;
 
     // Acknowledgment tracking
     bool          waitingForAck;
@@ -182,6 +190,11 @@ class ElegooCC
     bool shouldPausePrint(unsigned long currentTime);
     void checkFilamentMovement(unsigned long currentTime);
     void checkFilamentRunout(unsigned long currentTime);
+    void clearAggregatedBacklog();
+    void resetTotalBacklog(float totalValue);
+    void recalculateTotalBacklog();
+    bool aggregatedDeficitSatisfied(float outstandingValue, unsigned long now, float threshold,
+                                     unsigned long holdWindowMs);
 
    public:
     // Singleton access method
