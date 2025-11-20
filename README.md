@@ -97,8 +97,8 @@ The WebUI shows the current status, whether filament has runout or stopped. It c
 
 The current firmware uses **extrusion telemetry from the printer (SDCP)** together with the BTT SFS 2.0 pulses to decide when filament has effectively stopped moving. You tune this behaviour from the Web UI **Settings** tab via:
 
-- **Expected Flow Deficit Threshold (mm)** – how many mm of *requested* filament (from SDCP) are allowed to accumulate without matching SFS movement before the print is considered jammed.
-- **Expected Flow Window (ms)** – how long unmatched requested filament is kept before it is ignored (anti‑jitter). Larger windows smooth out bursty telemetry, smaller windows detect jams faster.
+- **Expected Flow Deficit Threshold (mm)** – how many mm of *requested* filament (from SDCP) are allowed to accumulate without enough total-confirmed movement before the print is considered jammed.
+- **Expected Flow Window (ms)** – how long that backlog must persist above the threshold before a jam is declared; this acts purely as a hold time (no time-based decay).
 - **Start Print Timeout (ms)** – grace period after a print starts before any pause can be triggered.
 - **Behavior when SDCP replies are lost** – what to do if SDCP extrusion data stops arriving while printing:
   - Pause the print when SDCP replies stop.
@@ -106,13 +106,14 @@ The current firmware uses **extrusion telemetry from the printer (SDCP)** togeth
 
 Setting the deficit threshold too low may cause false positives on noisy prints; setting it too high may let jams run longer before being caught. The recommended approach is to start slightly conservative (lower threshold, shorter window), test on a simple print, and adjust upward until you no longer see spurious pauses.
 
-In the **current firmware**, outstanding expected filament (the backlog) only decreases when:
+In this total-extrusion-only firmware the backlog:
 
-- Pulses are seen from the SFS (actual filament movement).
-- SDCP reports negative extrusion deltas (retractions/rewinds).
-- The print leaves the printing state, which resets tracking.
+- is calculated directly from the printer’s reported `TotalExtrusion`.
+- decreases only when pulses arrive (each pulse subtracts the configured `movement_mm_per_pulse` from the backlog).
+- resets to zero after a jam/resume cycle so it can grow linearly with the printer’s cumulative total again.
+- only starts accumulating once the first SFS movement pulse is detected, so early telemetry isn’t treated as a deficit.
 
-There is no time-based decay of the backlog; `Expected Flow Window (ms)` now acts purely as the **hold time** that the backlog must remain above the threshold before a jam is considered real.
+There is no time-based decay; `Expected Flow Window (ms)` is simply the hold period before a sustained backlog triggers a pause.
 
 ## 3D printed case/adapter
 

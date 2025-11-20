@@ -23,10 +23,7 @@ function Settings() {
   const [flowTelemetryStaleMs, setFlowTelemetryStaleMs] = createSignal(1000)
   const [uiRefreshIntervalMs, setUiRefreshIntervalMs] = createSignal(1000)
   const [zeroDeficitLogging, setZeroDeficitLogging] = createSignal(false)
-  const [totalVsDeltaLogging, setTotalVsDeltaLogging] = createSignal(false)
   const [packetFlowLogging, setPacketFlowLogging] = createSignal(false)
-  const [useTotalExtrusionDeficit, setUseTotalExtrusionDeficit] = createSignal(false)
-  const [useTotalExtrusionBacklog, setUseTotalExtrusionBacklog] = createSignal(false)
   // Load settings from the server and scan for WiFi networks
   onMount(async () => {
     try {
@@ -57,10 +54,7 @@ function Settings() {
       setFlowTelemetryStaleMs(settings.flow_telemetry_stale_ms !== undefined ? settings.flow_telemetry_stale_ms : 1000)
       setUiRefreshIntervalMs(settings.ui_refresh_interval_ms !== undefined ? settings.ui_refresh_interval_ms : 1000)
       setZeroDeficitLogging(settings.zero_deficit_logging !== undefined ? settings.zero_deficit_logging : false)
-      setTotalVsDeltaLogging(settings.total_vs_delta_logging !== undefined ? settings.total_vs_delta_logging : false)
       setPacketFlowLogging(settings.packet_flow_logging !== undefined ? settings.packet_flow_logging : false)
-      setUseTotalExtrusionDeficit(settings.use_total_extrusion_deficit !== undefined ? settings.use_total_extrusion_deficit : false)
-      setUseTotalExtrusionBacklog(settings.use_total_extrusion_backlog !== undefined ? settings.use_total_extrusion_backlog : false)
 
       setError('')
     } catch (err: any) {
@@ -90,11 +84,8 @@ function Settings() {
         sdcp_loss_behavior: sdcpLossBehavior(),
         flow_telemetry_stale_ms: flowTelemetryStaleMs(),
         ui_refresh_interval_ms: uiRefreshIntervalMs(),
-          zero_deficit_logging: zeroDeficitLogging(),
-          total_vs_delta_logging: totalVsDeltaLogging(),
-          packet_flow_logging: packetFlowLogging(),
-        use_total_extrusion_deficit: useTotalExtrusionDeficit(),
-        use_total_extrusion_backlog: useTotalExtrusionBacklog(),
+        zero_deficit_logging: zeroDeficitLogging(),
+        packet_flow_logging: packetFlowLogging(),
         dev_mode: devMode(),
         verbose_logging: verboseLogging(),
         flow_summary_logging: flowSummaryLogging(),
@@ -381,22 +372,6 @@ function Settings() {
           </fieldset>
 
           <fieldset class="fieldset">
-            <legend class="fieldset-legend">Total vs delta logging</legend>
-            <label class="label cursor-pointer">
-              <input
-                type="checkbox"
-                id="totalVsDeltaLogging"
-                checked={totalVsDeltaLogging()}
-                onChange={(e) => setTotalVsDeltaLogging(e.target.checked)}
-                class="checkbox checkbox-accent"
-              />
-              <span class="label-text">
-                When enabled, log the SDCP TotalExtrusion value alongside the cumulative telemetry deltas and the backlog so we can compare them.
-              </span>
-            </label>
-          </fieldset>
-
-          <fieldset class="fieldset">
             <legend class="fieldset-legend">Packet flow logging</legend>
             <label class="label cursor-pointer">
               <input
@@ -407,39 +382,7 @@ function Settings() {
                 class="checkbox checkbox-accent"
               />
               <span class="label-text">
-                When enabled, log per-telemetry-packet stats (total, delta, backlog, pulses) with timestamps so we can spot missing frames.
-              </span>
-            </label>
-          </fieldset>
-
-          <fieldset class="fieldset">
-            <legend class="fieldset-legend">Use total-extrusion backlog logic</legend>
-            <label class="label cursor-pointer">
-              <input
-                type="checkbox"
-                id="useTotalBacklog"
-                checked={useTotalExtrusionDeficit()}
-                onChange={(e) => setUseTotalExtrusionDeficit(e.target.checked)}
-                class="checkbox checkbox-accent"
-              />
-              <span class="label-text">
-                When enabled, accumulate outstanding expected filament as a single backlog and subtract mm-per-pulse immediately, instead of queueing deltas.
-              </span>
-            </label>
-          </fieldset>
-
-          <fieldset class="fieldset">
-            <legend class="fieldset-legend">Use Total Extrusion Backlog Mode</legend>
-            <label class="label cursor-pointer">
-              <input
-                type="checkbox"
-                id="useTotalExtrusionBacklog"
-                checked={useTotalExtrusionBacklog()}
-                onChange={(e) => setUseTotalExtrusionBacklog(e.target.checked)}
-                class="checkbox checkbox-accent"
-              />
-              <span class="label-text">
-                When enabled, backlog is derived directly from the SDCP TotalExtrusion value (resetting to zero when tracking is reset or after a jam while the printer’s cumulative total keeps increasing).
+                When enabled, log per-telemetry-packet stats (total, backlog, pulses) with timestamps so we can spot missing frames.
               </span>
             </label>
           </fieldset>

@@ -69,25 +69,10 @@ void WebServer::begin()
                 settingsManager.setZeroDeficitLogging(
                     jsonObj["zero_deficit_logging"].as<bool>());
             }
-            if (jsonObj.containsKey("use_total_extrusion_deficit"))
-            {
-                settingsManager.setUseTotalExtrusionDeficit(
-                    jsonObj["use_total_extrusion_deficit"].as<bool>());
-            }
-            if (jsonObj.containsKey("total_vs_delta_logging"))
-            {
-                settingsManager.setTotalVsDeltaLogging(
-                    jsonObj["total_vs_delta_logging"].as<bool>());
-            }
             if (jsonObj.containsKey("packet_flow_logging"))
             {
                 settingsManager.setPacketFlowLogging(
                     jsonObj["packet_flow_logging"].as<bool>());
-            }
-            if (jsonObj.containsKey("use_total_extrusion_backlog"))
-            {
-                settingsManager.setUseTotalExtrusionBacklog(
-                    jsonObj["use_total_extrusion_backlog"].as<bool>());
             }
             if (jsonObj.containsKey("dev_mode"))
             {

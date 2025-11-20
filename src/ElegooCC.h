@@ -146,11 +146,10 @@ class ElegooCC
     float               aggregatedOutstandingMm;
     bool                aggregatedDeficitActive;
     unsigned long       aggregatedDeficitStartMs;
-    float               aggregatedDeltaPositiveSum;
-    float               aggregatedDeltaNetSum;
     float               aggregatedTotalBaselineMm;
     float               aggregatedPulseDeductMm;
     bool                aggregatedTotalBaselineValid;
+    bool                firstPulseSeen;
     float               lastTotalExtrusionValue;
     // Jam / pause tracking
     bool          jamPauseRequested;
