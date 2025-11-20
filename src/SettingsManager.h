@@ -17,9 +17,11 @@ struct user_settings
     float  expected_deficit_mm;
     int    expected_flow_window_ms;
     int    sdcp_loss_behavior;
+    int    flow_telemetry_stale_ms;
+    int    ui_refresh_interval_ms;
+    bool   zero_deficit_logging;
     bool   dev_mode;
     bool   verbose_logging;
-    bool   keep_expected_forever;
     bool   flow_summary_logging;
     float  movement_mm_per_pulse;
 };
@@ -59,9 +61,11 @@ class SettingsManager
     float  getExpectedDeficitMM();
     int    getExpectedFlowWindowMs();
     int    getSdcpLossBehavior();
+    int    getFlowTelemetryStaleMs();
+    int    getUiRefreshIntervalMs();
+    bool   getZeroDeficitLogging();
     bool   getDevMode();
     bool   getVerboseLogging();
-    bool   getKeepExpectedForever();
     bool   getFlowSummaryLogging();
     float  getMovementMmPerPulse();
 
@@ -76,9 +80,11 @@ class SettingsManager
     void setExpectedDeficitMM(float value);
     void setExpectedFlowWindowMs(int windowMs);
     void setSdcpLossBehavior(int behavior);
+    void setFlowTelemetryStaleMs(int staleMs);
+    void setUiRefreshIntervalMs(int intervalMs);
+    void setZeroDeficitLogging(bool enabled);
     void setDevMode(bool devMode);
     void setVerboseLogging(bool verbose);
-    void setKeepExpectedForever(bool keepAll);
     void setFlowSummaryLogging(bool enabled);
     void setMovementMmPerPulse(float mmPerPulse);
 

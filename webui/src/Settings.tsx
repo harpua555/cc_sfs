@@ -20,6 +20,9 @@ function Settings() {
   const [discovering, setDiscovering] = createSignal(false);
   const [discoverSuccess, setDiscoverSuccess] = createSignal(false);
   const [movementPerPulse, setMovementPerPulse] = createSignal(1.5)
+  const [flowTelemetryStaleMs, setFlowTelemetryStaleMs] = createSignal(1000)
+  const [uiRefreshIntervalMs, setUiRefreshIntervalMs] = createSignal(1000)
+  const [zeroDeficitLogging, setZeroDeficitLogging] = createSignal(false)
   // Load settings from the server and scan for WiFi networks
   onMount(async () => {
     try {
@@ -47,6 +50,9 @@ function Settings() {
       setVerboseLogging(settings.verbose_logging !== undefined ? settings.verbose_logging : false)
       setFlowSummaryLogging(settings.flow_summary_logging !== undefined ? settings.flow_summary_logging : false)
       setMovementPerPulse(settings.movement_mm_per_pulse !== undefined ? settings.movement_mm_per_pulse : 1.5)
+      setFlowTelemetryStaleMs(settings.flow_telemetry_stale_ms !== undefined ? settings.flow_telemetry_stale_ms : 1000)
+      setUiRefreshIntervalMs(settings.ui_refresh_interval_ms !== undefined ? settings.ui_refresh_interval_ms : 1000)
+      setZeroDeficitLogging(settings.zero_deficit_logging !== undefined ? settings.zero_deficit_logging : false)
 
       setError('')
     } catch (err: any) {
@@ -74,6 +80,9 @@ function Settings() {
         expected_deficit_mm: expectedDeficit(),
         expected_flow_window_ms: expectedWindow(),
         sdcp_loss_behavior: sdcpLossBehavior(),
+        flow_telemetry_stale_ms: flowTelemetryStaleMs(),
+        ui_refresh_interval_ms: uiRefreshIntervalMs(),
+        zero_deficit_logging: zeroDeficitLogging(),
         dev_mode: devMode(),
         verbose_logging: verboseLogging(),
         flow_summary_logging: flowSummaryLogging(),
@@ -216,8 +225,9 @@ function Settings() {
             <input
               type="number"
               id="expectedDeficit"
-              value={expectedDeficit().toFixed(2)}
+              value={expectedDeficit()}
               onInput={(e) => setExpectedDeficit(parseFloat(e.target.value) || 0)}
+              onBlur={() => setExpectedDeficit(parseFloat(expectedDeficit().toFixed(2)))}
               min="0"
               max="50"
               step="0.1"
@@ -252,8 +262,9 @@ function Settings() {
             <input
               type="number"
               id="movementPerPulse"
-              value={movementPerPulse().toFixed(2)}
+              value={movementPerPulse()}
               onInput={(e) => setMovementPerPulse(parseFloat(e.target.value) || 0)}
+              onBlur={() => setMovementPerPulse(parseFloat(movementPerPulse().toFixed(2)))}
               min="0.1"
               max="10"
               step="0.01"
@@ -305,6 +316,56 @@ function Settings() {
               <option value={1}>Pause print when SDCP replies stop</option>
               <option value={2}>Disable detection until SDCP replies return</option>
             </select>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">SDCP connection time considered lost (ms)</legend>
+            <input
+              type="number"
+              id="flowTelemetryStaleMs"
+              value={flowTelemetryStaleMs()}
+              onInput={(e) => setFlowTelemetryStaleMs(parseInt(e.target.value) || 1000)}
+              min="250"
+              max="60000"
+              step="250"
+              class="input"
+            />
+            <p class="label">
+              How long the printer can go without updated extrusion telemetry before it is considered lost for jam detection purposes.
+            </p>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Web UI refresh interval (ms)</legend>
+            <input
+              type="number"
+              id="uiRefreshIntervalMs"
+              value={uiRefreshIntervalMs()}
+              onInput={(e) => setUiRefreshIntervalMs(parseInt(e.target.value) || 1000)}
+              min="250"
+              max="5000"
+              step="250"
+              class="input"
+            />
+            <p class="label">
+              How often the Status page polls the ESP for updated sensor and printer information.
+            </p>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Explicit zero-deficit logging</legend>
+            <label class="label cursor-pointer">
+              <input
+                type="checkbox"
+                id="zeroDeficitLogging"
+                checked={zeroDeficitLogging()}
+                onChange={(e) => setZeroDeficitLogging(e.target.checked)}
+                class="checkbox checkbox-accent"
+              />
+              <span class="label-text">
+                When enabled, logs whenever the deficit is explicitly reset to 0mm (for example when tracking resets or telemetry becomes unavailable).
+              </span>
+            </label>
           </fieldset>
 
           <fieldset class="fieldset">

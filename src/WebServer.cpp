@@ -54,6 +54,21 @@ void WebServer::begin()
             {
                 settingsManager.setSdcpLossBehavior(jsonObj["sdcp_loss_behavior"].as<int>());
             }
+            if (jsonObj.containsKey("flow_telemetry_stale_ms"))
+            {
+                settingsManager.setFlowTelemetryStaleMs(
+                    jsonObj["flow_telemetry_stale_ms"].as<int>());
+            }
+            if (jsonObj.containsKey("ui_refresh_interval_ms"))
+            {
+                settingsManager.setUiRefreshIntervalMs(
+                    jsonObj["ui_refresh_interval_ms"].as<int>());
+            }
+            if (jsonObj.containsKey("zero_deficit_logging"))
+            {
+                settingsManager.setZeroDeficitLogging(
+                    jsonObj["zero_deficit_logging"].as<bool>());
+            }
             if (jsonObj.containsKey("dev_mode"))
             {
                 settingsManager.setDevMode(jsonObj["dev_mode"].as<bool>());
@@ -66,11 +81,6 @@ void WebServer::begin()
             {
                 settingsManager.setFlowSummaryLogging(
                     jsonObj["flow_summary_logging"].as<bool>());
-            }
-            if (jsonObj.containsKey("keep_expected_forever"))
-            {
-                settingsManager.setKeepExpectedForever(
-                    jsonObj["keep_expected_forever"].as<bool>());
             }
             if (jsonObj.containsKey("movement_mm_per_pulse"))
             {
@@ -140,6 +150,8 @@ void WebServer::begin()
                   jsonDoc["elegoo"]["deficitThresholdMm"]   = elegooStatus.deficitThresholdMm;
                   jsonDoc["elegoo"]["deficitRatio"]         = elegooStatus.deficitRatio;
                   jsonDoc["elegoo"]["movementPulses"]       = (uint32_t) elegooStatus.movementPulseCount;
+                  jsonDoc["elegoo"]["uiRefreshIntervalMs"]  = settingsManager.getUiRefreshIntervalMs();
+                  jsonDoc["elegoo"]["flowTelemetryStaleMs"] = settingsManager.getFlowTelemetryStaleMs();
 
                   String jsonResponse;
                   serializeJson(jsonDoc, jsonResponse);
@@ -147,7 +159,7 @@ void WebServer::begin()
               });
 
     // Logs endpoint
-    server.on("/logs", HTTP_GET,
+    server.on("/api/logs", HTTP_GET,
               [](AsyncWebServerRequest *request)
               {
                   String jsonResponse = logger.getLogsAsJson();
@@ -155,7 +167,7 @@ void WebServer::begin()
               });
 
     // Raw text logs endpoint
-    server.on("/logs_text", HTTP_GET,
+    server.on("/api/logs_text", HTTP_GET,
               [](AsyncWebServerRequest *request)
               {
                   String textResponse = logger.getLogsAsText();
@@ -179,7 +191,23 @@ void WebServer::begin()
 
     // Serve static files from SPIFFS
     server.serveStatic("/assets/", SPIFFS, "/assets/");
-    server.serveStatic("/", SPIFFS, "/");
+    // Our build process renames index.html -> index.htm in data/.
+    server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.htm");
+
+    // SPA-style routing: for any unknown GET that isn't an API or asset,
+    // serve index.htm so that the frontend router can handle the path.
+    server.onNotFound([](AsyncWebServerRequest *request) {
+        if (request->method() == HTTP_GET &&
+            !request->url().startsWith("/api/") &&
+            !request->url().startsWith("/assets/"))
+        {
+            request->send(SPIFFS, "/index.htm", "text/html");
+        }
+        else
+        {
+            request->send(404, "text/plain", "Not found");
+        }
+    });
 }
 
 void WebServer::loop()

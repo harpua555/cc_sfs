@@ -15,3 +15,5 @@ website/public/manifest.json
 website/public/*.bin
 
 elegoo-homeassistant
+
+.commands

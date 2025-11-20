@@ -29,9 +29,11 @@ SettingsManager::SettingsManager()
     settings.expected_deficit_mm      = 8.4f;
     settings.expected_flow_window_ms  = 1500;
     settings.sdcp_loss_behavior       = 2;
+    settings.flow_telemetry_stale_ms  = 1000;
+    settings.ui_refresh_interval_ms   = 1000;
+    settings.zero_deficit_logging     = false;
     settings.dev_mode                 = false;
     settings.verbose_logging          = false;
-    settings.keep_expected_forever    = false;
     settings.flow_summary_logging     = false;
     settings.movement_mm_per_pulse    = 1.5f;
 }
@@ -72,13 +74,23 @@ bool SettingsManager::load()
                                                    : 1500;
     settings.sdcp_loss_behavior =
         doc.containsKey("sdcp_loss_behavior") ? doc["sdcp_loss_behavior"].as<int>() : 2;
+    settings.flow_telemetry_stale_ms =
+        doc.containsKey("flow_telemetry_stale_ms")
+            ? doc["flow_telemetry_stale_ms"].as<int>()
+            : 1000;
+    settings.ui_refresh_interval_ms =
+        doc.containsKey("ui_refresh_interval_ms")
+            ? doc["ui_refresh_interval_ms"].as<int>()
+            : 1000;
+    settings.zero_deficit_logging =
+        doc.containsKey("zero_deficit_logging")
+            ? doc["zero_deficit_logging"].as<bool>()
+            : false;
     settings.dev_mode =
         doc.containsKey("dev_mode") ? doc["dev_mode"].as<bool>() : false;
-    settings.verbose_logging =
-        doc.containsKey("verbose_logging") ? doc["verbose_logging"].as<bool>() : false;
-    settings.keep_expected_forever = doc.containsKey("keep_expected_forever")
-                                         ? doc["keep_expected_forever"].as<bool>()
-                                         : false;
+    settings.verbose_logging = doc.containsKey("verbose_logging")
+                                   ? doc["verbose_logging"].as<bool>()
+                                   : false;
     settings.flow_summary_logging = doc.containsKey("flow_summary_logging")
                                         ? doc["flow_summary_logging"].as<bool>()
                                         : false;
@@ -183,6 +195,20 @@ int SettingsManager::getSdcpLossBehavior()
     return getSettings().sdcp_loss_behavior;
 }
 
+int SettingsManager::getFlowTelemetryStaleMs()
+{
+    return getSettings().flow_telemetry_stale_ms;
+}
+
+int SettingsManager::getUiRefreshIntervalMs()
+{
+    return getSettings().ui_refresh_interval_ms;
+}
+
+bool SettingsManager::getZeroDeficitLogging()
+{
+    return getSettings().zero_deficit_logging;
+}
 bool SettingsManager::getDevMode()
 {
     return getSettings().dev_mode;
@@ -191,11 +217,6 @@ bool SettingsManager::getDevMode()
 bool SettingsManager::getVerboseLogging()
 {
     return getSettings().verbose_logging;
-}
-
-bool SettingsManager::getKeepExpectedForever()
-{
-    return getSettings().keep_expected_forever;
 }
 
 bool SettingsManager::getFlowSummaryLogging()
@@ -297,6 +318,27 @@ void SettingsManager::setSdcpLossBehavior(int behavior)
     settings.sdcp_loss_behavior = behavior;
 }
 
+void SettingsManager::setFlowTelemetryStaleMs(int staleMs)
+{
+    if (!isLoaded)
+        load();
+    settings.flow_telemetry_stale_ms = staleMs;
+}
+
+void SettingsManager::setUiRefreshIntervalMs(int intervalMs)
+{
+    if (!isLoaded)
+        load();
+    settings.ui_refresh_interval_ms = intervalMs;
+}
+
+void SettingsManager::setZeroDeficitLogging(bool enabled)
+{
+    if (!isLoaded)
+        load();
+    settings.zero_deficit_logging = enabled;
+}
+
 void SettingsManager::setDevMode(bool devMode)
 {
     if (!isLoaded)
@@ -309,13 +351,6 @@ void SettingsManager::setVerboseLogging(bool verbose)
     if (!isLoaded)
         load();
     settings.verbose_logging = verbose;
-}
-
-void SettingsManager::setKeepExpectedForever(bool keepAll)
-{
-    if (!isLoaded)
-        load();
-    settings.keep_expected_forever = keepAll;
 }
 
 void SettingsManager::setFlowSummaryLogging(bool enabled)
@@ -347,9 +382,11 @@ String SettingsManager::toJson(bool includePassword)
     doc["expected_deficit_mm"] = settings.expected_deficit_mm;
     doc["expected_flow_window_ms"] = settings.expected_flow_window_ms;
     doc["sdcp_loss_behavior"]  = settings.sdcp_loss_behavior;
-    doc["dev_mode"]            = settings.dev_mode;
-    doc["verbose_logging"]     = settings.verbose_logging;
-    doc["keep_expected_forever"] = settings.keep_expected_forever;
+    doc["flow_telemetry_stale_ms"] = settings.flow_telemetry_stale_ms;
+    doc["ui_refresh_interval_ms"]  = settings.ui_refresh_interval_ms;
+    doc["zero_deficit_logging"]    = settings.zero_deficit_logging;
+    doc["dev_mode"]              = settings.dev_mode;
+    doc["verbose_logging"]       = settings.verbose_logging;
     doc["flow_summary_logging"]  = settings.flow_summary_logging;
     doc["movement_mm_per_pulse"] = settings.movement_mm_per_pulse;
 

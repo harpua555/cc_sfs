@@ -220,6 +220,14 @@ void ElegooCC::handleStatus(JsonDocument &doc)
     {
         JsonObject          printInfo = status["PrintInfo"];
         sdcp_print_status_t newStatus = printInfo["Status"].as<sdcp_print_status_t>();
+
+        // Any time we receive a well-formed PrintInfo block, treat SDCP
+        // telemetry as available at the connection level, even if this
+        // particular payload doesn't include extrusion fields. Extrusion
+        // freshness is tracked separately via expectedTelemetryAvailable.
+        telemetryAvailableLastStatus = true;
+        lastSuccessfulTelemetryMs    = statusTimestamp;
+
         if (newStatus != printStatus)
         {
             bool wasPrinting   = (printStatus == SDCP_PRINT_STATUS_PRINTING);
@@ -235,16 +243,15 @@ void ElegooCC::handleStatus(JsonDocument &doc)
                     printStatus == SDCP_PRINT_STATUS_PAUSED ||
                     printStatus == SDCP_PRINT_STATUS_PAUSING)
                 {
-                    // Resume from a paused state: keep accumulated totals, but
-                    // allow tracking to continue. If we previously paused due
-                    // to a jam, clear the jam state on the first movement.
                     logger.log("Print status changed to printing (resume)");
                     trackingFrozen = false;
-                    if (jamPauseRequested)
-                    {
-                        needDeficitResetOnPulse = true;
-                        filamentStopped         = false;
-                    }
+                    // On resume, clear the accumulated deficit so jam
+                    // detection starts fresh from this point in the print.
+                    flowTracker.reset();
+                    currentDeficitMm        = 0.0f;
+                    deficitRatio            = 0.0f;
+                    jamPauseRequested       = false;
+                    filamentStopped         = false;
                 }
                 else
                 {
@@ -285,14 +292,17 @@ void ElegooCC::handleStatus(JsonDocument &doc)
                 }
             }
         }
-        printStatus   = newStatus;
-        currentLayer  = printInfo["CurrentLayer"];
-        totalLayer    = printInfo["TotalLayer"];
-        progress      = printInfo["Progress"];
-        currentTicks  = printInfo["CurrentTicks"];
-        totalTicks    = printInfo["TotalTicks"];
-        PrintSpeedPct                = printInfo["PrintSpeedPct"];
-        telemetryAvailableLastStatus = processFilamentTelemetry(printInfo, statusTimestamp);
+        printStatus  = newStatus;
+        currentLayer = printInfo["CurrentLayer"];
+        totalLayer   = printInfo["TotalLayer"];
+        progress     = printInfo["Progress"];
+        currentTicks = printInfo["CurrentTicks"];
+        totalTicks   = printInfo["TotalTicks"];
+        PrintSpeedPct = printInfo["PrintSpeedPct"];
+
+        // Update extrusion tracking (expected/actual/deficit) based on any
+        // TotalExtrusion / CurrentExtrusion fields present in this payload.
+        processFilamentTelemetry(printInfo, statusTimestamp);
 
         if (settingsManager.getVerboseLogging())
         {
@@ -331,6 +341,10 @@ void ElegooCC::resetFilamentTracking()
     jamPauseRequested          = false;
     trackingFrozen             = false;
     needDeficitResetOnPulse    = false;
+    if (settingsManager.getZeroDeficitLogging())
+    {
+        logger.log("Deficit reset to 0.00mm (tracking reset)");
+    }
     flowTracker.reset();
 }
 
@@ -343,8 +357,14 @@ void ElegooCC::updateExpectedFilament(unsigned long currentTime)
         return;
     }
 
+    int staleMs = settingsManager.getFlowTelemetryStaleMs();
+    if (staleMs <= 0)
+    {
+        staleMs = EXPECTED_FILAMENT_STALE_MS;
+    }
+
     if (expectedTelemetryAvailable &&
-        (currentTime - lastTelemetryReceiveMs) > EXPECTED_FILAMENT_STALE_MS)
+        (currentTime - lastTelemetryReceiveMs) > (unsigned long) staleMs)
     {
         // Telemetry is stale; stop treating it as available so we don't
         // derive new movement-only decisions from it, but keep the existing
@@ -380,18 +400,6 @@ bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
     bool  hasDelta   = tryReadExtrusionValue(printInfo, "CurrentExtrusion",
                                             CURRENT_EXTRUSION_HEX_KEY, deltaValue);
 
-    if (!hasTotal && !hasDelta)
-    {
-        expectedTelemetryAvailable   = false;
-        telemetryAvailableLastStatus = false;
-        return false;
-    }
-
-    telemetryAvailableLastStatus = true;
-    expectedTelemetryAvailable   = true;
-    lastSuccessfulTelemetryMs    = currentTime;
-    lastTelemetryReceiveMs       = currentTime;
-
     if (hasTotal)
     {
         expectedFilamentMM = totalValue < 0 ? 0 : totalValue;
@@ -412,6 +420,16 @@ bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
             // pulses to "pay it back".
             flowTracker.addActual(-deltaValue);
         }
+    }
+
+    // Track freshness of extrusion telemetry separately from general SDCP
+    // connectivity. We only mark extrusion telemetry as available when
+    // we actually observe TotalExtrusion or CurrentExtrusion in a status
+    // payload, and let updateExpectedFilament() mark it stale over time.
+    if (hasTotal || hasDelta)
+    {
+        expectedTelemetryAvailable = true;
+        lastTelemetryReceiveMs     = currentTime;
     }
 
     return true;
@@ -611,17 +629,6 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     {
         if (lastMovementValue != -1 && isPrinting())
         {
-            if (needDeficitResetOnPulse)
-            {
-                logger.log("Resetting filament deficit on first movement after resume");
-                flowTracker.reset();
-                currentDeficitMm        = 0.0f;
-                deficitRatio            = 0.0f;
-                needDeficitResetOnPulse = false;
-                jamPauseRequested       = false;
-                filamentStopped         = false;
-            }
-
             float movementMm = settingsManager.getMovementMmPerPulse();
             if (movementMm <= 0.0f)
             {
@@ -648,14 +655,9 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     // FilamentStopped should only be derived from SDCP extrusion data.
     if (!expectedTelemetryAvailable)
     {
-        currentDeficitMm   = 0.0f;
-        deficitThresholdMm = 0.0f;
-        deficitRatio       = 0.0f;
-        if (filamentStopped)
-        {
-            logger.log("Filament movement started");
-        }
-        filamentStopped = false;
+        // When extrusion telemetry is temporarily unavailable, avoid mutating
+        // the current deficit or jam state. We only clear the deficit on
+        // explicit tracking resets, not on transient telemetry gaps.
         return;
     }
 
@@ -738,10 +740,21 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     }
     else if (!newFilamentStopped && filamentStopped)
     {
-        logger.log("Filament movement started");
+        // Once we've requested a jam-driven pause, keep the jam state latched
+        // until the printer has actually transitioned to a paused state and
+        // then resumed. Avoid logging "movement started" prematurely in that
+        // window so the UI keeps showing the jam condition.
+        if (!jamPauseRequested && !trackingFrozen)
+        {
+            logger.log("Filament movement started");
+            filamentStopped = false;
+        }
     }
 
-    filamentStopped = newFilamentStopped;
+    if (!jamPauseRequested && !trackingFrozen)
+    {
+        filamentStopped = newFilamentStopped;
+    }
 }
 
 bool ElegooCC::shouldPausePrint(unsigned long currentTime)

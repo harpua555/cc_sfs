@@ -1,7 +1,5 @@
 import { createSignal, onMount, onCleanup } from 'solid-js'
 
-
-
 const PRINT_STATUS_MAP = {
   0: 'Idle',
   1: 'Homing',
@@ -49,6 +47,8 @@ function Status() {
       deficitThresholdMm: 0,
       deficitRatio: 0,
       movementPulses: 0,
+      uiRefreshIntervalMs: 1000,
+      flowTelemetryStaleMs: 1000,
     }
   })
 
@@ -72,7 +72,17 @@ function Status() {
   onMount(async () => {
     setLoading(true)
     await refreshSensorStatus()
-    const intervalId = setInterval(refreshSensorStatus, 2500)
+
+    // Use the interval advertised by the backend for this session,
+    // falling back to 1000ms if not set.
+    const initialStatus = sensorStatus()
+    const ms =
+      (initialStatus?.elegoo?.uiRefreshIntervalMs &&
+        initialStatus.elegoo.uiRefreshIntervalMs > 0 &&
+        initialStatus.elegoo.uiRefreshIntervalMs) ||
+      1000
+
+    const intervalId = setInterval(refreshSensorStatus, ms)
 
     onCleanup(() => {
       clearInterval(intervalId)
@@ -160,15 +170,35 @@ function Status() {
                 </div>
                 <div>
                   <h3 class="font-bold">Deficit (mm)</h3>
-                  <p>{sensorStatus().elegoo.currentDeficitMm?.toFixed?.(2) ?? sensorStatus().elegoo.currentDeficitMm}</p>
+                  <p>
+                    {sensorStatus().elegoo.telemetryAvailable && sensorStatus().elegoo.isPrinting
+                      ? (sensorStatus().elegoo.currentDeficitMm?.toFixed?.(2) ?? sensorStatus().elegoo.currentDeficitMm)
+                      : 'N/A'}
+                  </p>
                 </div>
                 <div>
                   <h3 class="font-bold">Deficit (% of threshold)</h3>
-                  <p>{(sensorStatus().elegoo.deficitRatio * 100).toFixed(2)}%</p>
+                  <p>
+                    {sensorStatus().elegoo.telemetryAvailable && sensorStatus().elegoo.isPrinting
+                      ? `${(sensorStatus().elegoo.deficitRatio * 100).toFixed(2)}%`
+                      : 'N/A'}
+                  </p>
                 </div>
                 <div>
                   <h3 class="font-bold">Movement Pulses</h3>
                   <p>{sensorStatus().elegoo.movementPulses}</p>
+                </div>
+              </div>
+
+              <div class="divider mt-4 mb-2"></div>
+              <div class="text-xs text-base-content/70 flex gap-6 flex-wrap">
+                <div>
+                  <h3 class="font-bold">Debug: UI refresh interval</h3>
+                  <p>{sensorStatus().elegoo.uiRefreshIntervalMs} ms</p>
+                </div>
+                <div>
+                  <h3 class="font-bold">Debug: flow telemetry stale timeout</h3>
+                  <p>{sensorStatus().elegoo.flowTelemetryStaleMs} ms</p>
                 </div>
               </div>
             </div>
