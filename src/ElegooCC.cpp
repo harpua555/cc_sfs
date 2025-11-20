@@ -228,7 +228,11 @@ void ElegooCC::handleStatus(JsonDocument &doc)
             if (isPrintingNow)
             {
                 // Transition into PRINTING.
-                if (printStatus == SDCP_PRINT_STATUS_PAUSED ||
+                // If we previously issued a jam-driven pause, treat the next
+                // PRINTING state as a resume regardless of any intermediate
+                // statuses (e.g. HEATING or other transitional codes).
+                if (jamPauseRequested ||
+                    printStatus == SDCP_PRINT_STATUS_PAUSED ||
                     printStatus == SDCP_PRINT_STATUS_PAUSING)
                 {
                     // Resume from a paused state: keep accumulated totals, but
@@ -679,6 +683,16 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
 
     bool deficitHoldSatisfied =
         flowTracker.deficitSatisfied(deficit, currentTime, threshold, holdMs);
+
+    // After a jam-driven pause, when the printer resumes printing we wait
+    // for the first movement pulse to explicitly reset the deficit. Until
+    // that pulse arrives, suppress any further jam detection so we don't
+    // immediately re-pause based on the old backlog.
+    if (needDeficitResetOnPulse && isPrinting())
+    {
+        deficitTriggered     = false;
+        deficitHoldSatisfied = false;
+    }
 
     currentDeficitMm   = deficit;
     deficitThresholdMm = threshold;
