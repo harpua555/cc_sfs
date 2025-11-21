@@ -137,6 +137,7 @@ class ElegooCC
     float               currentDeficitMm;
     float               deficitThresholdMm;
     float               deficitRatio;
+    float               smoothedDeficitRatio;  // EWMA smoothed for display (reduces transient spikes)
 
     unsigned long startedAt;
     FilamentMotionSensor motionSensor;  // New simplified sensor (Klipper-style)

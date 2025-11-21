@@ -33,6 +33,10 @@ void FilamentMotionSensor::reset()
     ewmaActualMm          = 0.0f;
     ewmaLastExpectedMm    = 0.0f;
     ewmaLastActualMm      = 0.0f;
+
+    // Reset jam hysteresis
+    jamConsecutiveCount     = 0;
+    hardJamConsecutiveCount = 0;
 }
 
 void FilamentMotionSensor::setTrackingMode(FilamentTrackingMode mode, unsigned long windowMs,
@@ -91,14 +95,19 @@ void FilamentMotionSensor::updateExpectedPosition(float totalExtrusionMm)
         ewmaExpectedMm       = 0.0f;
         ewmaActualMm         = 0.0f;
     }
-    // Track significant changes (> 0.1mm) to trigger grace period
-    else if (abs(totalExtrusionMm - expectedPositionMm) > 0.1f)
-    {
-        lastExpectedUpdateMs = currentTime;
-    }
 
     // Calculate deltas for windowed/EWMA modes
     float expectedDelta = totalExtrusionMm - expectedPositionMm;
+
+    // Telemetry gap detection: If no updates for >2 seconds, reset grace period
+    // This handles sparse infill, travel moves, print pauses, speed changes
+    // Grace period applies after: (1) initialization, (2) retractions, (3) telemetry gaps
+    unsigned long timeSinceLastUpdate = currentTime - lastExpectedUpdateMs;
+    if (timeSinceLastUpdate > 2000 && expectedDelta > 0.01f)
+    {
+        // Telemetry gap detected - reset grace period timer when extrusion resumes
+        lastExpectedUpdateMs = currentTime;
+    }
 
     if (trackingMode == TRACKING_MODE_WINDOWED && expectedDelta > 0.01f)
     {
@@ -191,6 +200,16 @@ void FilamentMotionSensor::pruneOldSamples()
     }
 
     sampleCount = newCount;
+    // Update nextSampleIndex to point after the last valid sample
+    // This ensures mostRecentIndex calculation works correctly after pruning
+    if (sampleCount > 0)
+    {
+        nextSampleIndex = sampleCount;
+    }
+    else
+    {
+        nextSampleIndex = 0;
+    }
 }
 
 void FilamentMotionSensor::getWindowedDistances(float &expectedMm, float &actualMm) const
@@ -207,12 +226,25 @@ void FilamentMotionSensor::getWindowedDistances(float &expectedMm, float &actual
     }
 }
 
-bool FilamentMotionSensor::isJammed(float detectionLengthMm, unsigned long gracePeriodMs) const
+bool FilamentMotionSensor::isJammed(float ratioThreshold, float hardJamThresholdMm,
+                                     int softJamTimeMs, int hardJamTimeMs, int checkIntervalMs,
+                                     unsigned long gracePeriodMs) const
 {
-    if (!initialized || detectionLengthMm <= 0.0f)
+    if (!initialized || ratioThreshold <= 0.0f || checkIntervalMs <= 0)
     {
+        jamConsecutiveCount = 0;
+        hardJamConsecutiveCount = 0;
         return false;
     }
+
+    // Calculate required consecutive checks based on time thresholds
+    // e.g., 3000ms / 1000ms per check = 3 consecutive checks required
+    int softJamChecksRequired = (softJamTimeMs + checkIntervalMs - 1) / checkIntervalMs;  // Ceiling division
+    int hardJamChecksRequired = (hardJamTimeMs + checkIntervalMs - 1) / checkIntervalMs;
+
+    // Ensure at least 1 check required
+    if (softJamChecksRequired < 1) softJamChecksRequired = 1;
+    if (hardJamChecksRequired < 1) hardJamChecksRequired = 1;
 
     // Grace period: Don't check immediately after expected position update
     if (gracePeriodMs > 0)
@@ -220,6 +252,8 @@ bool FilamentMotionSensor::isJammed(float detectionLengthMm, unsigned long grace
         unsigned long timeSinceUpdate = millis() - lastExpectedUpdateMs;
         if (timeSinceUpdate < gracePeriodMs)
         {
+            jamConsecutiveCount = 0;
+            hardJamConsecutiveCount = 0;
             return false;  // Still within grace period
         }
     }
@@ -228,18 +262,47 @@ bool FilamentMotionSensor::isJammed(float detectionLengthMm, unsigned long grace
     float expectedDistance = getExpectedDistance();
     float actualDistance   = getSensorDistance();
 
-    // Minimum distance check (prevents false positives on tiny movements)
-    float minDistanceBeforeCheck = detectionLengthMm * 0.5f;
-    if (expectedDistance < minDistanceBeforeCheck)
+    // Hard jam detection: No movement at all while expecting filament
+    // This catches complete blockages quickly (e.g., 2 consecutive checks = ~2 seconds)
+    if (expectedDistance >= hardJamThresholdMm && actualDistance < 0.1f)
     {
+        hardJamConsecutiveCount++;
+        if (hardJamConsecutiveCount >= hardJamChecksRequired)
+        {
+            return true;  // Hard jam - complete blockage/snag
+        }
+    }
+    else
+    {
+        hardJamConsecutiveCount = 0;
+    }
+
+    // Minimum distance check (prevents false positives on tiny movements)
+    if (expectedDistance < 1.0f)
+    {
+        jamConsecutiveCount = 0;
         return false;
     }
 
-    // Calculate deficit
-    float deficit = expectedDistance - actualDistance;
-    if (deficit < 0.0f) deficit = 0.0f;
+    // Soft jam detection: Calculate deficit ratio
+    // ratio = actual / expected (e.g., 0.3 = 30% of filament passing)
+    // deficitRatio = (expected - actual) / expected (e.g., 0.7 = 70% deficit)
+    float ratio = actualDistance / expectedDistance;
+    float deficitRatio = 1.0f - ratio;
 
-    return deficit > detectionLengthMm;
+    // Hysteresis: Require sustained bad ratio to prevent transient spike false positives
+    // This is critical for windowed tracking where samples expire causing temporary spikes
+    if (deficitRatio > ratioThreshold)  // e.g., > 0.7 means < 30% passing
+    {
+        jamConsecutiveCount++;
+        return jamConsecutiveCount >= softJamChecksRequired;  // e.g., 3 checks = ~3 seconds
+    }
+    else
+    {
+        // Ratio acceptable - reset counter
+        jamConsecutiveCount = 0;
+        return false;
+    }
 }
 
 float FilamentMotionSensor::getDeficit() const

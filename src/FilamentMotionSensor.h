@@ -60,12 +60,18 @@ class FilamentMotionSensor
     void addSensorPulse(float mmPerPulse);
 
     /**
-     * Check if jam is detected
-     * @param detectionLengthMm Threshold distance (expected - actual) to trigger jam
+     * Check if jam is detected using ratio-based detection
+     * @param ratioThreshold Soft jam: deficit ratio threshold (0.7 = 70% deficit, < 30% passing)
+     * @param hardJamThresholdMm Hard jam: mm expected with zero movement to trigger
+     * @param softJamTimeMs Soft jam: how long ratio must stay bad (ms, e.g., 3000 = 3 sec)
+     * @param hardJamTimeMs Hard jam: how long zero movement required (ms, e.g., 2000 = 2 sec)
+     * @param checkIntervalMs How often isJammed() is called (ms, e.g., 1000 = every second)
      * @param gracePeriodMs Grace period in ms after expected position update before checking
-     * @return true if jam detected
+     * @return true if jam detected (either hard or soft)
      */
-    bool isJammed(float detectionLengthMm, unsigned long gracePeriodMs = 0) const;
+    bool isJammed(float ratioThreshold, float hardJamThresholdMm,
+                  int softJamTimeMs, int hardJamTimeMs, int checkIntervalMs,
+                  unsigned long gracePeriodMs = 0) const;
 
     /**
      * Get current deficit (how much expected exceeds actual)
@@ -121,6 +127,10 @@ class FilamentMotionSensor
     float ewmaAlpha;  // Smoothing factor (0.0-1.0, higher = more weight on recent)
     float ewmaLastExpectedMm;
     float ewmaLastActualMm;
+
+    // Jam detection hysteresis (prevents false positives from transient spikes)
+    mutable int jamConsecutiveCount;       // Counter for soft jam detection (ratio-based)
+    mutable int hardJamConsecutiveCount;   // Counter for hard jam detection (zero movement)
 
     // Helper methods for windowed tracking
     void addSample(float expectedDeltaMm, float actualDeltaMm);

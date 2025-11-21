@@ -14,8 +14,12 @@ struct user_settings
     int    start_print_timeout;
     bool   enabled;
     bool   has_connected;
-    float  detection_length_mm;          // Renamed from expected_deficit_mm (Klipper-style)
+    float  detection_length_mm;          // DEPRECATED: Use ratio-based detection instead
     int    detection_grace_period_ms;    // Grace period after move command before checking jams
+    float  detection_ratio_threshold;    // Soft jam: deficit ratio threshold (0.7 = 70% deficit, < 30% passing)
+    float  detection_hard_jam_mm;        // Hard jam: mm expected with zero movement to trigger
+    int    detection_soft_jam_time_ms;   // Soft jam: how long ratio must stay bad (ms, e.g., 3000 = 3 sec)
+    int    detection_hard_jam_time_ms;   // Hard jam: how long zero movement required (ms, e.g., 2000 = 2 sec)
     int    tracking_mode;                // 0=Cumulative, 1=Windowed, 2=EWMA
     int    tracking_window_ms;           // Window size for windowed mode (milliseconds)
     float  tracking_ewma_alpha;          // EWMA smoothing factor (0.0-1.0)
@@ -69,8 +73,12 @@ class SettingsManager
     int    getStartPrintTimeout();
     bool   getEnabled();
     bool   getHasConnected();
-    float  getDetectionLengthMM();          // New unified setting
+    float  getDetectionLengthMM();          // DEPRECATED: Use ratio-based detection
     int    getDetectionGracePeriodMs();     // Grace period for look-ahead moves
+    float  getDetectionRatioThreshold();    // Soft jam ratio threshold
+    float  getDetectionHardJamMm();         // Hard jam threshold
+    int    getDetectionSoftJamTimeMs();     // Soft jam duration threshold
+    int    getDetectionHardJamTimeMs();     // Hard jam duration threshold
     int    getTrackingMode();               // Tracking algorithm mode
     int    getTrackingWindowMs();           // Window size for windowed mode
     float  getTrackingEwmaAlpha();          // EWMA smoothing factor
@@ -94,9 +102,13 @@ class SettingsManager
     void setStartPrintTimeout(int timeoutMs);
     void setEnabled(bool enabled);
     void setHasConnected(bool hasConnected);
-    void setDetectionLengthMM(float value);        // New unified setter
-    void setDetectionGracePeriodMs(int periodMs);  // Grace period setter
-    void setTrackingMode(int mode);                // Tracking algorithm setter
+    void setDetectionLengthMM(float value);            // DEPRECATED: Use ratio-based detection
+    void setDetectionGracePeriodMs(int periodMs);      // Grace period setter
+    void setDetectionRatioThreshold(float threshold);  // Soft jam ratio threshold setter
+    void setDetectionHardJamMm(float mmThreshold);     // Hard jam threshold setter
+    void setDetectionSoftJamTimeMs(int timeMs);        // Soft jam duration setter
+    void setDetectionHardJamTimeMs(int timeMs);        // Hard jam duration setter
+    void setTrackingMode(int mode);                    // Tracking algorithm setter
     void setTrackingWindowMs(int windowMs);        // Window size setter
     void setTrackingEwmaAlpha(float alpha);        // EWMA alpha setter
     void setSdcpLossBehavior(int behavior);

@@ -26,8 +26,12 @@ SettingsManager::SettingsManager()
     settings.start_print_timeout = 10000;
     settings.enabled             = true;
     settings.has_connected       = false;
-    settings.detection_length_mm        = 10.0f;  // Klipper default is 7mm, we use 10mm
+    settings.detection_length_mm        = 10.0f;  // DEPRECATED: Use ratio-based detection
     settings.detection_grace_period_ms  = 500;    // 500ms grace period (reduced from 1500ms)
+    settings.detection_ratio_threshold  = 0.70f;  // 70% deficit = must see at least 30% passing
+    settings.detection_hard_jam_mm      = 5.0f;   // 5mm expected with zero movement = hard jam
+    settings.detection_soft_jam_time_ms = 3000;   // 3 seconds of bad ratio required
+    settings.detection_hard_jam_time_ms = 2000;   // 2 seconds of zero movement required
     settings.tracking_mode              = 1;      // 1 = Windowed (Klipper-style)
     settings.tracking_window_ms         = 5000;   // 5 second sliding window
     settings.tracking_ewma_alpha        = 0.3f;   // 30% weight on new samples
@@ -128,6 +132,18 @@ bool SettingsManager::load()
     settings.tracking_ewma_alpha = doc.containsKey("tracking_ewma_alpha")
                                        ? doc["tracking_ewma_alpha"].as<float>()
                                        : 0.3f;  // Default 0.3
+    settings.detection_ratio_threshold = doc.containsKey("detection_ratio_threshold")
+                                             ? doc["detection_ratio_threshold"].as<float>()
+                                             : 0.70f;  // Default 70% deficit
+    settings.detection_hard_jam_mm = doc.containsKey("detection_hard_jam_mm")
+                                         ? doc["detection_hard_jam_mm"].as<float>()
+                                         : 5.0f;  // Default 5mm
+    settings.detection_soft_jam_time_ms = doc.containsKey("detection_soft_jam_time_ms")
+                                              ? doc["detection_soft_jam_time_ms"].as<int>()
+                                              : 3000;  // Default 3 seconds
+    settings.detection_hard_jam_time_ms = doc.containsKey("detection_hard_jam_time_ms")
+                                              ? doc["detection_hard_jam_time_ms"].as<int>()
+                                              : 2000;  // Default 2 seconds
 
     // Load deprecated settings for backwards compatibility (ignored in new code)
     settings.expected_deficit_mm = settings.detection_length_mm;  // Keep in sync
@@ -228,6 +244,26 @@ float SettingsManager::getDetectionLengthMM()
 int SettingsManager::getDetectionGracePeriodMs()
 {
     return getSettings().detection_grace_period_ms;
+}
+
+float SettingsManager::getDetectionRatioThreshold()
+{
+    return getSettings().detection_ratio_threshold;
+}
+
+float SettingsManager::getDetectionHardJamMm()
+{
+    return getSettings().detection_hard_jam_mm;
+}
+
+int SettingsManager::getDetectionSoftJamTimeMs()
+{
+    return getSettings().detection_soft_jam_time_ms;
+}
+
+int SettingsManager::getDetectionHardJamTimeMs()
+{
+    return getSettings().detection_hard_jam_time_ms;
 }
 
 int SettingsManager::getTrackingMode()
@@ -374,6 +410,34 @@ void SettingsManager::setDetectionGracePeriodMs(int periodMs)
     settings.detection_grace_period_ms = periodMs;
 }
 
+void SettingsManager::setDetectionRatioThreshold(float threshold)
+{
+    if (!isLoaded)
+        load();
+    settings.detection_ratio_threshold = threshold;
+}
+
+void SettingsManager::setDetectionHardJamMm(float mmThreshold)
+{
+    if (!isLoaded)
+        load();
+    settings.detection_hard_jam_mm = mmThreshold;
+}
+
+void SettingsManager::setDetectionSoftJamTimeMs(int timeMs)
+{
+    if (!isLoaded)
+        load();
+    settings.detection_soft_jam_time_ms = timeMs;
+}
+
+void SettingsManager::setDetectionHardJamTimeMs(int timeMs)
+{
+    if (!isLoaded)
+        load();
+    settings.detection_hard_jam_time_ms = timeMs;
+}
+
 void SettingsManager::setTrackingMode(int mode)
 {
     if (!isLoaded)
@@ -462,8 +526,12 @@ String SettingsManager::toJson(bool includePassword)
     doc["start_print_timeout"] = settings.start_print_timeout;
     doc["enabled"]             = settings.enabled;
     doc["has_connected"]       = settings.has_connected;
-    doc["detection_length_mm"]        = settings.detection_length_mm;  // New unified setting
+    doc["detection_length_mm"]        = settings.detection_length_mm;  // DEPRECATED
     doc["detection_grace_period_ms"]  = settings.detection_grace_period_ms;
+    doc["detection_ratio_threshold"]  = settings.detection_ratio_threshold;
+    doc["detection_hard_jam_mm"]      = settings.detection_hard_jam_mm;
+    doc["detection_soft_jam_time_ms"] = settings.detection_soft_jam_time_ms;
+    doc["detection_hard_jam_time_ms"] = settings.detection_hard_jam_time_ms;
     doc["tracking_mode"]              = settings.tracking_mode;
     doc["tracking_window_ms"]         = settings.tracking_window_ms;
     doc["tracking_ewma_alpha"]        = settings.tracking_ewma_alpha;

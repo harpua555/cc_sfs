@@ -58,6 +58,7 @@ ElegooCC::ElegooCC()
     currentDeficitMm             = 0.0f;
     deficitThresholdMm           = 0.0f;
     deficitRatio                 = 0.0f;
+    smoothedDeficitRatio         = 0.0f;
     movementPulseCount           = 0;
     lastFlowLogMs                = 0;
     lastSummaryLogMs             = 0;
@@ -253,6 +254,7 @@ void ElegooCC::handleStatus(JsonDocument &doc)
                     motionSensor.reset();
                     currentDeficitMm        = 0.0f;
                     deficitRatio            = 0.0f;
+                    smoothedDeficitRatio    = 0.0f;
                     jamPauseRequested       = false;
                     filamentStopped         = false;
                     if (settingsManager.getVerboseLogging())
@@ -268,12 +270,15 @@ void ElegooCC::handleStatus(JsonDocument &doc)
                     resetFilamentTracking();
 
                     // Log active settings for this print (excluding network config)
-                    logger.logf("Print settings: pulse=%.2fmm mode=%d window=%dms grace=%dms threshold=%.1fmm",
+                    logger.logf("Print settings: pulse=%.2fmm mode=%d window=%dms grace=%dms ratio_thr=%.2f hard_jam=%.1fmm soft_time=%dms hard_time=%dms",
                                settingsManager.getMovementMmPerPulse(),
                                settingsManager.getTrackingMode(),
                                settingsManager.getTrackingWindowMs(),
                                settingsManager.getDetectionGracePeriodMs(),
-                               settingsManager.getDetectionLengthMm());
+                               settingsManager.getDetectionRatioThreshold(),
+                               settingsManager.getDetectionHardJamMm(),
+                               settingsManager.getDetectionSoftJamTimeMs(),
+                               settingsManager.getDetectionHardJamTimeMs());
                 }
             }
             else if (wasPrinting)
@@ -361,6 +366,7 @@ void ElegooCC::resetFilamentTracking()
     currentDeficitMm           = 0.0f;
     deficitThresholdMm         = 0.0f;
     deficitRatio               = 0.0f;
+    smoothedDeficitRatio       = 0.0f;
     lastFlowLogMs              = 0;
     jamPauseRequested          = false;
     trackingFrozen             = false;
@@ -659,11 +665,29 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
         return;
     }
 
-    // Get detection threshold (distance-based, not time-based)
-    float detectionLength = settingsManager.getDetectionLengthMM();
-    if (detectionLength <= 0)
+    // Get ratio-based detection thresholds
+    float ratioThreshold = settingsManager.getDetectionRatioThreshold();
+    if (ratioThreshold <= 0.0f || ratioThreshold > 1.0f)
     {
-        detectionLength = 10.0f;  // Default 10mm
+        ratioThreshold = 0.70f;  // Default 70% deficit threshold
+    }
+
+    float hardJamThresholdMm = settingsManager.getDetectionHardJamMm();
+    if (hardJamThresholdMm <= 0.0f)
+    {
+        hardJamThresholdMm = 5.0f;  // Default 5mm
+    }
+
+    int softJamTimeMs = settingsManager.getDetectionSoftJamTimeMs();
+    if (softJamTimeMs <= 0)
+    {
+        softJamTimeMs = 3000;  // Default 3 seconds
+    }
+
+    int hardJamTimeMs = settingsManager.getDetectionHardJamTimeMs();
+    if (hardJamTimeMs <= 0)
+    {
+        hardJamTimeMs = 2000;  // Default 2 seconds
     }
 
     // Get grace period setting (handles SDCP look-ahead behavior)
@@ -673,14 +697,30 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
         gracePeriod = 500;  // Default 500ms
     }
 
-    // Distance-based jam detection with grace period (Klipper-style + SDCP adaptation)
-    bool jammed = motionSensor.isJammed(detectionLength, gracePeriod);
-    float deficit = motionSensor.getDeficit();
+    // Ratio-based jam detection with hysteresis (prevents false positives)
+    // Check interval is EXPECTED_FILAMENT_SAMPLE_MS (1000ms = 1 second)
+    bool jammed = motionSensor.isJammed(ratioThreshold, hardJamThresholdMm,
+                                        softJamTimeMs, hardJamTimeMs,
+                                        EXPECTED_FILAMENT_SAMPLE_MS, gracePeriod);
+
+    // Calculate deficit and ratio for UI/logging
+    float expectedDistance = motionSensor.getExpectedDistance();
+    float actualDistance = motionSensor.getSensorDistance();
+    float deficit = expectedDistance - actualDistance;
+    if (deficit < 0.0f) deficit = 0.0f;
+
+    float deficitRatioValue = (expectedDistance > 1.0f) ? (deficit / expectedDistance) : 0.0f;
+
+    // Apply EWMA smoothing to deficit ratio for display (reduces transient spikes in UI)
+    // Jam detection uses raw values with hysteresis, so smoothing doesn't affect safety
+    // Alpha = 0.1 means 10% weight on new value, 90% on history
+    const float RATIO_SMOOTHING_ALPHA = 0.1f;
+    smoothedDeficitRatio = RATIO_SMOOTHING_ALPHA * deficitRatioValue + (1.0f - RATIO_SMOOTHING_ALPHA) * smoothedDeficitRatio;
 
     // Update metrics for UI/logging
     currentDeficitMm   = deficit;
-    deficitThresholdMm = detectionLength;
-    deficitRatio       = (detectionLength > 0.0f) ? (deficit / detectionLength) : 0.0f;
+    deficitThresholdMm = ratioThreshold * expectedDistance;  // Convert ratio to mm for UI
+    deficitRatio       = deficitRatioValue;  // Raw value (internal use only)
 
     // Periodic logging with BOTH windowed and cumulative values + memory monitoring
     if (debugFlow && currentlyPrinting && (currentTime - lastFlowLogMs) >= EXPECTED_FILAMENT_SAMPLE_MS)
@@ -697,7 +737,7 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
             "Flow: win_exp=%.2f win_sns=%.2f deficit=%.2f | cumul_sns=%.2f pulses=%lu | thr=%.2f ratio=%.2f jam=%d heap=%lu",
             windowedExpected, windowedSensor, currentDeficitMm,
             cumulativeSensor, movementPulseCount,
-            deficitThresholdMm, deficitRatio, jammed ? 1 : 0, freeHeap);
+            deficitThresholdMm, smoothedDeficitRatio, jammed ? 1 : 0, freeHeap);
     }
 
     if (summaryFlow && currentlyPrinting && !debugFlow && (currentTime - lastSummaryLogMs) >= 1000)
@@ -706,15 +746,15 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
         logger.logf("Flow summary: expected=%.2fmm sensor=%.2fmm deficit=%.2fmm "
                     "threshold=%.2fmm ratio=%.2f pulses=%lu",
                     motionSensor.getExpectedDistance(), motionSensor.getSensorDistance(),
-                    currentDeficitMm, deficitThresholdMm, deficitRatio, movementPulseCount);
+                    currentDeficitMm, deficitThresholdMm, smoothedDeficitRatio, movementPulseCount);
     }
 
     // Jam state change detection and logging
     if (jammed && !filamentStopped)
     {
-        logger.logf("Filament jam detected! Expected %.2fmm, sensor %.2fmm, deficit %.2fmm (threshold %.2fmm)",
-                    motionSensor.getExpectedDistance(), motionSensor.getSensorDistance(),
-                    deficit, detectionLength);
+        logger.logf("Filament jam detected! Expected %.2fmm, sensor %.2fmm, deficit %.2fmm ratio=%.2f (thr=%.2f)",
+                    expectedDistance, actualDistance,
+                    deficit, deficitRatioValue, ratioThreshold);
     }
     else if (!jammed && filamentStopped)
     {
@@ -844,10 +884,10 @@ printer_info_t ElegooCC::getCurrentInformation()
     info.actualFilamentMM     = actualFilamentMM;
     info.lastExpectedDeltaMM  = lastExpectedDeltaMM;
     info.telemetryAvailable   = telemetryAvailableLastStatus;
-    // Expose deficit metrics for UI/debugging
+    // Expose deficit metrics for UI/debugging (using smoothed ratio for cleaner display)
     info.currentDeficitMm     = currentDeficitMm;
     info.deficitThresholdMm   = deficitThresholdMm;
-    info.deficitRatio         = deficitRatio;
+    info.deficitRatio         = smoothedDeficitRatio;  // Smoothed for UI display
     info.movementPulseCount   = movementPulseCount;
 
     return info;

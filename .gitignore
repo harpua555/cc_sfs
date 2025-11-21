@@ -18,3 +18,5 @@ website/public/*.bin
 .commands
 elegoo-homeassistant
 .claude/*
+.claude
+elegoo-homeassistant/
