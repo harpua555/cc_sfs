@@ -59,7 +59,7 @@ void Logger::log(const String &message)
   currentIndex = (currentIndex + 1) % logCapacity;
   if (totalEntries < logCapacity)
   {
-    totalEntries++;
+    totalEntries = totalEntries + 1;  // Avoid ++ with volatile
   }
 }
 
@@ -119,7 +119,7 @@ String Logger::getLogsAsJson()
 
   for (int i = 0; i < returnCount; i++)
   {
-    int bufferIndex = (startIndex + i) % logCapacity;
+    int bufferIndex = (startIndex + i) % logCapacity;  // Use logCapacity, not MAX_LOG_ENTRIES
 
     JsonObject logEntry = logsArray.createNestedObject();
     logEntry["uuid"] = logBuffer[bufferIndex].uuid;
@@ -148,14 +148,27 @@ String Logger::getLogsAsText(int maxEntries)
     return result;
   }
 
-  int count = totalEntries;
-  if (count == 0)
+  // Snapshot indices atomically to avoid race conditions
+  int snapshotIndex = currentIndex;
+  int snapshotCount = totalEntries;
+
+  // Validate snapshot
+  if (snapshotCount < 0 || snapshotCount > logCapacity)
+  {
+    snapshotCount = 0;  // Corrupted, return empty
+  }
+  if (snapshotIndex < 0 || snapshotIndex >= logCapacity)
+  {
+    snapshotIndex = 0;  // Corrupted, return empty
+  }
+
+  if (snapshotCount == 0)
   {
     return result;
   }
 
   // Limit entries
-  int returnCount = count;
+  int returnCount = snapshotCount;
   bool truncated = false;
   if (returnCount > maxEntries)
   {
@@ -168,17 +181,23 @@ String Logger::getLogsAsText(int maxEntries)
 
   // If we have less than logCapacity entries, start from 0
   // Otherwise, start from currentIndex (oldest entry)
-  int startIndex = (count < logCapacity) ? 0 : currentIndex;
+  int startIndex = (snapshotCount < logCapacity) ? 0 : snapshotIndex;
 
   // If we're limiting entries, skip to the most recent ones
-  if (count > returnCount)
+  if (snapshotCount > returnCount)
   {
-    startIndex = (startIndex + (count - returnCount)) % logCapacity;
+    startIndex = (startIndex + (snapshotCount - returnCount)) % logCapacity;
   }
 
   for (int i = 0; i < returnCount; i++)
   {
     int bufferIndex = (startIndex + i) % logCapacity;
+
+    // Bounds check to avoid reading garbage
+    if (bufferIndex < 0 || bufferIndex >= logCapacity)
+    {
+      continue;  // Skip corrupted index
+    }
 
     result += String(logBuffer[bufferIndex].timestamp);
     result += " ";
@@ -186,10 +205,11 @@ String Logger::getLogsAsText(int maxEntries)
     result += "\n";
   }
 
-  if (truncated)
-  {
-    result += "[truncated: showing last " + String(returnCount) + " entries]\n";
-  }
+  // Truncated message removed - not needed, endpoint always returns last N entries
+  // if (truncated)
+  // {
+  //   result += "[truncated: showing last " + String(returnCount) + " entries]\n";
+  // }
 
   return result;
 }

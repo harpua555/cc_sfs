@@ -10,7 +10,7 @@
 
 #define ACK_TIMEOUT_MS 5000
 constexpr float        DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM = 8.4f;
-constexpr unsigned int EXPECTED_FILAMENT_SAMPLE_MS           = 250;
+constexpr unsigned int EXPECTED_FILAMENT_SAMPLE_MS           = 1000;  // Log max once per second to prevent heap exhaustion
 constexpr unsigned int EXPECTED_FILAMENT_STALE_MS            = 1000;
 constexpr unsigned int SDCP_LOSS_TIMEOUT_MS                  = 10000;
 constexpr unsigned int PAUSE_REARM_DELAY_MS                  = 3000;
@@ -61,6 +61,12 @@ ElegooCC::ElegooCC()
     movementPulseCount           = 0;
     lastFlowLogMs                = 0;
     lastSummaryLogMs             = 0;
+    lastLoggedExpected           = -1.0f;
+    lastLoggedActual             = -1.0f;
+    lastLoggedDeficit            = -1.0f;
+    lastLoggedPrintStatus        = -1;
+    lastLoggedLayer              = -1;
+    lastLoggedTotalLayer         = -1;
     jamPauseRequested            = false;
     trackingFrozen               = false;
     motionSensor.reset();
@@ -260,6 +266,14 @@ void ElegooCC::handleStatus(JsonDocument &doc)
                     logger.log("Print status changed to printing");
                     startedAt = millis();
                     resetFilamentTracking();
+
+                    // Log active settings for this print (excluding network config)
+                    logger.logf("Print settings: pulse=%.2fmm mode=%d window=%dms grace=%dms threshold=%.1fmm",
+                               settingsManager.getMovementMmPerPulse(),
+                               settingsManager.getTrackingMode(),
+                               settingsManager.getTrackingWindowMs(),
+                               settingsManager.getDetectionGracePeriodMs(),
+                               settingsManager.getDetectionLengthMm());
                 }
             }
             else if (wasPrinting)
@@ -307,11 +321,20 @@ void ElegooCC::handleStatus(JsonDocument &doc)
 
         if (settingsManager.getVerboseLogging())
         {
-            logger.logf(
-                "Flow debug: SDCP status print=%d layer=%d/%d progress=%d expected=%.2fmm "
-                "delta=%.2fmm telemetry=%d",
-                (int) printStatus, currentLayer, totalLayer, progress, expectedFilamentMM,
-                lastExpectedDeltaMM, telemetryAvailableLastStatus ? 1 : 0);
+            // Only log if meaningful status values have changed
+            if ((int)printStatus != lastLoggedPrintStatus ||
+                currentLayer != lastLoggedLayer ||
+                totalLayer != lastLoggedTotalLayer)
+            {
+                logger.logf(
+                    "Flow debug: SDCP status print=%d layer=%d/%d progress=%d expected=%.2fmm "
+                    "delta=%.2fmm telemetry=%d",
+                    (int) printStatus, currentLayer, totalLayer, progress, expectedFilamentMM,
+                    lastExpectedDeltaMM, telemetryAvailableLastStatus ? 1 : 0);
+                lastLoggedPrintStatus = (int)printStatus;
+                lastLoggedLayer = currentLayer;
+                lastLoggedTotalLayer = totalLayer;
+            }
         }
     }
 
@@ -397,11 +420,23 @@ bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long cur
 
         if (settingsManager.getVerboseLogging())
         {
-            logger.logf("Telemetry: total=%.2fmm, sensor=%.2fmm, deficit=%.2fmm, pulses=%lu",
-                        motionSensor.getExpectedDistance(),
-                        motionSensor.getSensorDistance(),
-                        motionSensor.getDeficit(),
-                        movementPulseCount);
+            float windowedExpected = motionSensor.getExpectedDistance();
+            float windowedSensor = motionSensor.getSensorDistance();
+            float currentDeficit = motionSensor.getDeficit();
+
+            // Only log if values have changed
+            if (windowedExpected != lastLoggedExpected ||
+                windowedSensor != lastLoggedActual ||
+                currentDeficit != lastLoggedDeficit)
+            {
+                // Show SDCP expected + cumulative sensor (not windowed) for clarity
+                logger.logf("Telemetry: sdcp_exp=%.2fmm cumul_sns=%.2fmm pulses=%lu | win_exp=%.2f win_sns=%.2f deficit=%.2f",
+                            expectedFilamentMM, actualFilamentMM, movementPulseCount,
+                            windowedExpected, windowedSensor, currentDeficit);
+                lastLoggedExpected = windowedExpected;
+                lastLoggedActual = windowedSensor;
+                lastLoggedDeficit = currentDeficit;
+            }
         }
 
         return true;
@@ -540,10 +575,7 @@ void ElegooCC::loop()
         }
         else if (currentTime - lastPing > 29900)
         {
-            if (settingsManager.getVerboseLogging())
-            {
-                logger.log("Sending Ping");
-            }
+            // Keepalive ping every 30 seconds - no need to log, only log actual disconnects
             // For all who venture to this line of code wondering why I didn't use sendPing(), it's
             // because for some reason that doesn't work. but this does!
             this->webSocket.sendTXT("ping");
@@ -595,10 +627,12 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     bool summaryFlow          = settingsManager.getFlowSummaryLogging();
     bool currentlyPrinting    = isPrinting();
 
-    // Track movement pulses - each pulse represents actual filament movement
+    // Track movement pulses - only count RISING edge (LOW to HIGH transition)
+    // This matches typical sensor specs where 2.88mm = one complete pulse cycle
     if (currentMovementValue != lastMovementValue)
     {
-        if (lastMovementValue != -1 && isPrinting())
+        // Only trigger on RISING edge (LOW->HIGH, 0->1)
+        if (currentMovementValue == HIGH && lastMovementValue == LOW && isPrinting())
         {
             float movementMm = settingsManager.getMovementMmPerPulse();
             if (movementMm <= 0.0f)
@@ -611,12 +645,8 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
             actualFilamentMM += movementMm;
             movementPulseCount++;
 
-            if (debugFlow)
-            {
-                logger.logf("Sensor pulse: %d->%d, total=%.2fmm, pulses=%lu",
-                            lastMovementValue, currentMovementValue,
-                            actualFilamentMM, movementPulseCount);
-            }
+            // Removed per-pulse logging - way too verbose, causes heap exhaustion
+            // Pulse count is shown in periodic Flow log instead
         }
 
         lastMovementValue = currentMovementValue;
@@ -652,14 +682,22 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     deficitThresholdMm = detectionLength;
     deficitRatio       = (detectionLength > 0.0f) ? (deficit / detectionLength) : 0.0f;
 
-    // Periodic logging
+    // Periodic logging with BOTH windowed and cumulative values + memory monitoring
     if (debugFlow && currentlyPrinting && (currentTime - lastFlowLogMs) >= EXPECTED_FILAMENT_SAMPLE_MS)
     {
         lastFlowLogMs = currentTime;
+
+        // Show windowed values (for tracking algo) AND cumulative values (for debugging)
+        float windowedExpected = motionSensor.getExpectedDistance();
+        float windowedSensor = motionSensor.getSensorDistance();
+        float cumulativeSensor = actualFilamentMM;  // Cumulative sensor total
+        uint32_t freeHeap = ESP.getFreeHeap();      // Monitor memory
+
         logger.logf(
-            "Flow: expected=%.2fmm sensor=%.2fmm deficit=%.2fmm threshold=%.2fmm ratio=%.2f pulses=%lu jammed=%d",
-            motionSensor.getExpectedDistance(), motionSensor.getSensorDistance(),
-            currentDeficitMm, deficitThresholdMm, deficitRatio, movementPulseCount, jammed ? 1 : 0);
+            "Flow: win_exp=%.2f win_sns=%.2f deficit=%.2f | cumul_sns=%.2f pulses=%lu | thr=%.2f ratio=%.2f jam=%d heap=%lu",
+            windowedExpected, windowedSensor, currentDeficitMm,
+            cumulativeSensor, movementPulseCount,
+            deficitThresholdMm, deficitRatio, jammed ? 1 : 0, freeHeap);
     }
 
     if (summaryFlow && currentlyPrinting && !debugFlow && (currentTime - lastSummaryLogMs) >= 1000)

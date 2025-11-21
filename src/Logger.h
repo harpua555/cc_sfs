@@ -22,8 +22,8 @@ class Logger
 
     LogEntry *logBuffer;
     int logCapacity;
-    int currentIndex;
-    int totalEntries;
+    volatile int currentIndex;  // volatile to prevent compiler optimization issues
+    volatile int totalEntries;
     UUID uuidGenerator;
 
     Logger();

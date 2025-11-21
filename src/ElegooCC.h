@@ -144,6 +144,14 @@ class ElegooCC
     unsigned long       lastFlowLogMs;
     unsigned long       lastSummaryLogMs;
 
+    // Track last logged values to avoid duplicate verbose logs
+    float         lastLoggedExpected;
+    float         lastLoggedActual;
+    float         lastLoggedDeficit;
+    int           lastLoggedPrintStatus;
+    int           lastLoggedLayer;
+    int           lastLoggedTotalLayer;
+
     // Jam / pause tracking
     bool          jamPauseRequested;
     bool          trackingFrozen;
