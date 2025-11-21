@@ -20,3 +20,12 @@ elegoo-homeassistant
 .claude/*
 .claude
 elegoo-homeassistant/
+.vscode
+MIGRATION_KLIPPER_STYLE.md
+RETRACTION_FIX.md
+SDCP_LOOKAHEAD_FIX.md
+TRACKING_ALGORITHMS.md
+WEBUI_TRACKING_SETTINGS.md
+act.sh
+act/
+merge_bin.py
