@@ -15,34 +15,37 @@ struct LogEntry
 
 class Logger
 {
-private:
-  static const int MAX_LOG_ENTRIES = 20000;
-  static const int FALLBACK_LOG_ENTRIES = 4096;
-  LogEntry *logBuffer;
-  int logCapacity;
-  int currentIndex;
-  int totalEntries;
-  UUID uuidGenerator;
+  private:
+    static const int MAX_LOG_ENTRIES = 20000;
+    static const int FALLBACK_LOG_ENTRIES = 4096;
+    static const int MAX_RETURNED_LOG_ENTRIES = 1024;
 
-  Logger();
+    LogEntry *logBuffer;
+    int logCapacity;
+    int currentIndex;
+    int totalEntries;
+    UUID uuidGenerator;
 
-  // Delete copy constructor and assignment operator
-  Logger(const Logger &) = delete;
-  Logger &operator=(const Logger &) = delete;
+    Logger();
 
-public:
-  // Singleton access method
-  static Logger &getInstance();
+    // Delete copy constructor and assignment operator
+    Logger(const Logger &) = delete;
+    Logger &operator=(const Logger &) = delete;
 
-  ~Logger();
+  public:
+    // Singleton access method
+    static Logger &getInstance();
 
-  void log(const String &message);
-  void log(const char *message);
-  void logf(const char *format, ...);
-  String getLogsAsJson();
-  String getLogsAsText();
-  void clearLogs();
-  int getLogCount();
+    ~Logger();
+
+    void log(const String &message);
+    void log(const char *message);
+    void logf(const char *format, ...);
+    String getLogsAsJson();
+    String getLogsAsText();
+    String getLogsAsText(int maxEntries);  // New: limit entries for live display
+    void clearLogs();
+    int getLogCount();
 };
 
 // Convenience macro for easier access

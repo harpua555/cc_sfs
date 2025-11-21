@@ -146,14 +146,6 @@ function Status() {
                   <h3 class="font-bold">Progress</h3>
                   <p>{sensorStatus().elegoo.progress}</p>
                 </div>
-                <div>
-                  <h3 class="font-bold">Current Ticks</h3>
-                  <p>{sensorStatus().elegoo.currentTicks}</p>
-                </div>
-                <div>
-                  <h3 class="font-bold">Total Ticks</h3>
-                  <p>{sensorStatus().elegoo.totalTicks}</p>
-                </div>
 
                 {/* Second row: flow metrics */}
                 <div>
@@ -163,10 +155,6 @@ function Status() {
                 <div>
                   <h3 class="font-bold">Actual Filament (mm)</h3>
                   <p>{sensorStatus().elegoo.actualFilament?.toFixed?.(2) ?? sensorStatus().elegoo.actualFilament}</p>
-                </div>
-                <div>
-                  <h3 class="font-bold">Last Expected Delta (mm)</h3>
-                  <p>{sensorStatus().elegoo.expectedDelta?.toFixed?.(2) ?? sensorStatus().elegoo.expectedDelta}</p>
                 </div>
                 <div>
                   <h3 class="font-bold">Deficit (mm)</h3>

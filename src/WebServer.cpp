@@ -42,14 +42,17 @@ void WebServer::begin()
             settingsManager.setPauseOnRunout(jsonObj["pause_on_runout"].as<bool>());
             settingsManager.setEnabled(jsonObj["enabled"].as<bool>());
             settingsManager.setStartPrintTimeout(jsonObj["start_print_timeout"].as<int>());
-            if (jsonObj.containsKey("expected_deficit_mm"))
+            // Handle both new and deprecated settings names for backwards compatibility
+            if (jsonObj.containsKey("detection_length_mm"))
             {
-                settingsManager.setExpectedDeficitMM(jsonObj["expected_deficit_mm"].as<float>());
+                settingsManager.setDetectionLengthMM(jsonObj["detection_length_mm"].as<float>());
             }
-            if (jsonObj.containsKey("expected_flow_window_ms"))
+            else if (jsonObj.containsKey("expected_deficit_mm"))
             {
-                settingsManager.setExpectedFlowWindowMs(jsonObj["expected_flow_window_ms"].as<int>());
+                // Deprecated: redirect to new setting
+                settingsManager.setDetectionLengthMM(jsonObj["expected_deficit_mm"].as<float>());
             }
+            // expected_flow_window_ms is deprecated and ignored (no longer used)
             if (jsonObj.containsKey("sdcp_loss_behavior"))
             {
                 settingsManager.setSdcpLossBehavior(jsonObj["sdcp_loss_behavior"].as<int>());
@@ -64,31 +67,12 @@ void WebServer::begin()
                 settingsManager.setUiRefreshIntervalMs(
                     jsonObj["ui_refresh_interval_ms"].as<int>());
             }
-            if (jsonObj.containsKey("zero_deficit_logging"))
-            {
-                settingsManager.setZeroDeficitLogging(
-                    jsonObj["zero_deficit_logging"].as<bool>());
-            }
-            if (jsonObj.containsKey("use_total_extrusion_deficit"))
-            {
-                settingsManager.setUseTotalExtrusionDeficit(
-                    jsonObj["use_total_extrusion_deficit"].as<bool>());
-            }
-            if (jsonObj.containsKey("total_vs_delta_logging"))
-            {
-                settingsManager.setTotalVsDeltaLogging(
-                    jsonObj["total_vs_delta_logging"].as<bool>());
-            }
-            if (jsonObj.containsKey("packet_flow_logging"))
-            {
-                settingsManager.setPacketFlowLogging(
-                    jsonObj["packet_flow_logging"].as<bool>());
-            }
-            if (jsonObj.containsKey("use_total_extrusion_backlog"))
-            {
-                settingsManager.setUseTotalExtrusionBacklog(
-                    jsonObj["use_total_extrusion_backlog"].as<bool>());
-            }
+            // Deprecated settings - accepted but ignored for backwards compatibility
+            // zero_deficit_logging - removed (use verbose_logging)
+            // use_total_extrusion_deficit - removed (always use total mode)
+            // total_vs_delta_logging - removed (only one mode now)
+            // packet_flow_logging - removed (use verbose_logging)
+            // use_total_extrusion_backlog - removed (always enabled)
             if (jsonObj.containsKey("dev_mode"))
             {
                 settingsManager.setDevMode(jsonObj["dev_mode"].as<bool>());
@@ -178,15 +162,16 @@ void WebServer::begin()
                   request->send(200, "application/json", jsonResponse);
               });
 
-    // Logs endpoint
-    server.on("/api/logs", HTTP_GET,
-              [](AsyncWebServerRequest *request)
-              {
-                  String jsonResponse = logger.getLogsAsJson();
-                  request->send(200, "application/json", jsonResponse);
-              });
+    // Logs endpoint (DISABLED - JSON serialization of 1024 entries exceeds 32KB buffer)
+    // Use /api/logs_live or /api/logs_text instead
+    // server.on("/api/logs", HTTP_GET,
+    //           [](AsyncWebServerRequest *request)
+    //           {
+    //               String jsonResponse = logger.getLogsAsJson();
+    //               request->send(200, "application/json", jsonResponse);
+    //           });
 
-    // Raw text logs endpoint
+    // Raw text logs endpoint (full logs for download)
     server.on("/api/logs_text", HTTP_GET,
               [](AsyncWebServerRequest *request)
               {
@@ -195,6 +180,14 @@ void WebServer::begin()
                       request->beginResponse(200, "text/plain", textResponse);
                   response->addHeader("Content-Disposition", "attachment; filename=\"logs.txt\"");
                   request->send(response);
+              });
+
+    // Live logs endpoint (last 100 entries for UI display)
+    server.on("/api/logs_live", HTTP_GET,
+              [](AsyncWebServerRequest *request)
+              {
+                  String textResponse = logger.getLogsAsText(100);  // Only last 100 entries
+                  request->send(200, "text/plain", textResponse);
               });
 
     // Version endpoint

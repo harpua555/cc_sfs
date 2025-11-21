@@ -90,20 +90,44 @@ String Logger::getLogsAsJson()
     return jsonResponse;
   }
 
-  // If we have less than MAX_LOG_ENTRIES, start from 0
-  // Otherwise, start from currentIndex (oldest entry)
-  int startIndex = (totalEntries < logCapacity) ? 0 : currentIndex;
   int count = totalEntries;
-
-  for (int i = 0; i < count; i++)
+  if (count == 0)
   {
-    int bufferIndex = (startIndex + i) % MAX_LOG_ENTRIES;
+    String jsonResponse;
+    serializeJson(jsonDoc, jsonResponse);
+    return jsonResponse;
+  }
+
+  // Limit to MAX_RETURNED_LOG_ENTRIES
+  int returnCount = count;
+  bool truncated = false;
+  if (returnCount > MAX_RETURNED_LOG_ENTRIES)
+  {
+    returnCount = MAX_RETURNED_LOG_ENTRIES;
+    truncated = true;
+  }
+
+  // If we have less than logCapacity entries, start from 0
+  // Otherwise, start from currentIndex (oldest entry)
+  int startIndex = (count < logCapacity) ? 0 : currentIndex;
+
+  // If we're truncating, skip to the most recent entries
+  if (count > returnCount)
+  {
+    startIndex = (startIndex + (count - returnCount)) % logCapacity;
+  }
+
+  for (int i = 0; i < returnCount; i++)
+  {
+    int bufferIndex = (startIndex + i) % logCapacity;
 
     JsonObject logEntry = logsArray.createNestedObject();
     logEntry["uuid"] = logBuffer[bufferIndex].uuid;
     logEntry["timestamp"] = logBuffer[bufferIndex].timestamp;
     logEntry["message"] = logBuffer[bufferIndex].message;
   }
+
+  jsonDoc["truncated"] = truncated;
 
   String jsonResponse;
   serializeJson(jsonDoc, jsonResponse);
@@ -112,6 +136,11 @@ String Logger::getLogsAsJson()
 
 String Logger::getLogsAsText()
 {
+  return getLogsAsText(MAX_RETURNED_LOG_ENTRIES);
+}
+
+String Logger::getLogsAsText(int maxEntries)
+{
   String result;
 
   if (logCapacity == 0 || logBuffer == nullptr)
@@ -119,19 +148,47 @@ String Logger::getLogsAsText()
     return result;
   }
 
-  // If we have less than MAX_LOG_ENTRIES, start from 0
-  // Otherwise, start from currentIndex (oldest entry)
-  int startIndex = (totalEntries < logCapacity) ? 0 : currentIndex;
-  int count      = totalEntries;
-
-  for (int i = 0; i < count; i++)
+  int count = totalEntries;
+  if (count == 0)
   {
-    int bufferIndex = (startIndex + i) % MAX_LOG_ENTRIES;
+    return result;
+  }
+
+  // Limit entries
+  int returnCount = count;
+  bool truncated = false;
+  if (returnCount > maxEntries)
+  {
+    returnCount = maxEntries;
+    truncated = true;
+  }
+
+  // Pre-allocate to avoid repeated reallocations
+  result.reserve(returnCount * 80 + 100);
+
+  // If we have less than logCapacity entries, start from 0
+  // Otherwise, start from currentIndex (oldest entry)
+  int startIndex = (count < logCapacity) ? 0 : currentIndex;
+
+  // If we're limiting entries, skip to the most recent ones
+  if (count > returnCount)
+  {
+    startIndex = (startIndex + (count - returnCount)) % logCapacity;
+  }
+
+  for (int i = 0; i < returnCount; i++)
+  {
+    int bufferIndex = (startIndex + i) % logCapacity;
 
     result += String(logBuffer[bufferIndex].timestamp);
     result += " ";
     result += logBuffer[bufferIndex].message;
     result += "\n";
+  }
+
+  if (truncated)
+  {
+    result += "[truncated: showing last " + String(returnCount) + " entries]\n";
   }
 
   return result;

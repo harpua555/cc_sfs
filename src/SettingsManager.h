@@ -14,20 +14,27 @@ struct user_settings
     int    start_print_timeout;
     bool   enabled;
     bool   has_connected;
-    float  expected_deficit_mm;
-    int    expected_flow_window_ms;
+    float  detection_length_mm;          // Renamed from expected_deficit_mm (Klipper-style)
+    int    detection_grace_period_ms;    // Grace period after move command before checking jams
+    int    tracking_mode;                // 0=Cumulative, 1=Windowed, 2=EWMA
+    int    tracking_window_ms;           // Window size for windowed mode (milliseconds)
+    float  tracking_ewma_alpha;          // EWMA smoothing factor (0.0-1.0)
     int    sdcp_loss_behavior;
     int    flow_telemetry_stale_ms;
     int    ui_refresh_interval_ms;
-    bool   zero_deficit_logging;
-    bool   use_total_extrusion_deficit;
-    bool   total_vs_delta_logging;
-    bool   packet_flow_logging;
-    bool   use_total_extrusion_backlog;
     bool   dev_mode;
     bool   verbose_logging;
     bool   flow_summary_logging;
     float  movement_mm_per_pulse;
+
+    // Deprecated settings (kept for backwards compatibility during migration)
+    float  expected_deficit_mm;        // DEPRECATED: use detection_length_mm
+    int    expected_flow_window_ms;    // DEPRECATED: distance-based detection only
+    bool   zero_deficit_logging;       // DEPRECATED: simplified logging
+    bool   use_total_extrusion_deficit;    // DEPRECATED: only total mode supported
+    bool   total_vs_delta_logging;         // DEPRECATED: delta mode removed
+    bool   packet_flow_logging;            // DEPRECATED: use verbose_logging
+    bool   use_total_extrusion_backlog;    // DEPRECATED: always enabled now
 };
 
 class SettingsManager
@@ -62,20 +69,22 @@ class SettingsManager
     int    getStartPrintTimeout();
     bool   getEnabled();
     bool   getHasConnected();
-    float  getExpectedDeficitMM();
-    int    getExpectedFlowWindowMs();
+    float  getDetectionLengthMM();          // New unified setting
+    int    getDetectionGracePeriodMs();     // Grace period for look-ahead moves
+    int    getTrackingMode();               // Tracking algorithm mode
+    int    getTrackingWindowMs();           // Window size for windowed mode
+    float  getTrackingEwmaAlpha();          // EWMA smoothing factor
     int    getSdcpLossBehavior();
     int    getFlowTelemetryStaleMs();
     int    getUiRefreshIntervalMs();
-    bool   getZeroDeficitLogging();
-    bool   getUseTotalExtrusionDeficit();
-    bool   getTotalVsDeltaLogging();
-    bool   getPacketFlowLogging();
-    bool   getUseTotalExtrusionBacklog();
     bool   getDevMode();
     bool   getVerboseLogging();
     bool   getFlowSummaryLogging();
     float  getMovementMmPerPulse();
+
+    // Deprecated getters (for backwards compatibility)
+    float  getExpectedDeficitMM();     // DEPRECATED: use getDetectionLengthMM()
+    int    getExpectedFlowWindowMs();  // DEPRECATED: returns 0
 
     void setSSID(const String &ssid);
     void setPassword(const String &password);
@@ -85,20 +94,21 @@ class SettingsManager
     void setStartPrintTimeout(int timeoutMs);
     void setEnabled(bool enabled);
     void setHasConnected(bool hasConnected);
-    void setExpectedDeficitMM(float value);
-    void setExpectedFlowWindowMs(int windowMs);
+    void setDetectionLengthMM(float value);        // New unified setter
+    void setDetectionGracePeriodMs(int periodMs);  // Grace period setter
+    void setTrackingMode(int mode);                // Tracking algorithm setter
+    void setTrackingWindowMs(int windowMs);        // Window size setter
+    void setTrackingEwmaAlpha(float alpha);        // EWMA alpha setter
     void setSdcpLossBehavior(int behavior);
     void setFlowTelemetryStaleMs(int staleMs);
     void setUiRefreshIntervalMs(int intervalMs);
-    void setZeroDeficitLogging(bool enabled);
-    void setUseTotalExtrusionDeficit(bool enabled);
-    void setTotalVsDeltaLogging(bool enabled);
-    void setPacketFlowLogging(bool enabled);
-    void setUseTotalExtrusionBacklog(bool enabled);
     void setDevMode(bool devMode);
     void setVerboseLogging(bool verbose);
     void setFlowSummaryLogging(bool enabled);
     void setMovementMmPerPulse(float mmPerPulse);
+
+    // Deprecated setters (for backwards compatibility)
+    void setExpectedDeficitMM(float value);    // DEPRECATED: use setDetectionLengthMM()
 
     String toJson(bool includePassword = true);
 };

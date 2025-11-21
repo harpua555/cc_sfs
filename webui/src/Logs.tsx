@@ -1,4 +1,4 @@
-import { createSignal, onMount, onCleanup, createEffect } from 'solid-js'
+import { createSignal, onMount, onCleanup, createEffect, For } from 'solid-js'
 
 interface LogEntry {
   uuid: string
@@ -25,7 +25,8 @@ function Logs() {
 
   const fetchLogs = async () => {
     try {
-      const response = await fetch('/api/logs_text')
+      // Use /api/logs_live endpoint which returns only last 100 entries
+      const response = await fetch('/api/logs_live')
       if (!response.ok) {
         throw new Error(`Failed to fetch logs: ${response.status} ${response.statusText}`)
       }
@@ -128,19 +129,21 @@ function Logs() {
           {logs().length === 0 ? (
             <div class="text-center text-green-400/70">No logs available</div>
           ) : (
-            logs().map((log) => (
-              <div class="whitespace-pre-wrap">
-                <span class="text-green-800">{formatTimestamp(log.timestamp)}:</span> {log.message}
-              </div>
-            ))
+            <For each={logs()}>
+              {(log) => (
+                <div class="whitespace-pre-wrap">
+                  <span class="text-green-800">{formatTimestamp(log.timestamp)}:</span> {log.message}
+                </div>
+              )}
+            </For>
           )}
         </div>
       )}
 
       <div class="mt-4 flex items-center justify-between flex-wrap gap-2 text-sm text-base-content/70">
-        <p>Logs are automatically refreshed every 5 seconds.</p>
+        <p>Showing last 100 log entries. Auto-refresh every 5 seconds.</p>
         <a class="btn btn-xs btn-outline btn-primary" href="/api/logs_text" download="sfs-logs.txt">
-          Download full log
+          Download full log (up to 1024 entries)
         </a>
       </div>
     </div>

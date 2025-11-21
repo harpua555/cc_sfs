@@ -86,6 +86,7 @@ void startAPMode()
 {
     logger.log("Starting AP mode");
     WiFi.softAP("ElegooXBTTSFS20", "elegooccsfs20");
+    logger.logf("AP IP Address: %s", WiFi.softAPIP().toString().c_str());
     // Stop mDNS as it's not needed in AP mode
     MDNS.end();
 }
@@ -93,6 +94,7 @@ void startAPMode()
 void handleSuccessfulWifiConnection()
 {
     logger.log("WiFi Connected");
+    logger.logf("IP Address: %s", WiFi.localIP().toString().c_str());
 
     // Mark that WiFi has successfully connected at least once
     if (!settingsManager.getHasConnected())

@@ -5,7 +5,7 @@
 #include <ArduinoJson.h>
 #include <WebSocketsClient.h>
 
-#include "FilamentFlowTracker.h"
+#include "FilamentMotionSensor.h"
 #include "UUID.h"
 
 #define CARBON_CENTAURI_PORT 3030
@@ -139,19 +139,11 @@ class ElegooCC
     float               deficitRatio;
 
     unsigned long startedAt;
-    FilamentFlowTracker flowTracker;
+    FilamentMotionSensor motionSensor;  // New simplified sensor (Klipper-style)
     unsigned long       movementPulseCount;
     unsigned long       lastFlowLogMs;
     unsigned long       lastSummaryLogMs;
-    float               aggregatedOutstandingMm;
-    bool                aggregatedDeficitActive;
-    unsigned long       aggregatedDeficitStartMs;
-    float               aggregatedDeltaPositiveSum;
-    float               aggregatedDeltaNetSum;
-    float               aggregatedTotalBaselineMm;
-    float               aggregatedPulseDeductMm;
-    bool                aggregatedTotalBaselineValid;
-    float               lastTotalExtrusionValue;
+
     // Jam / pause tracking
     bool          jamPauseRequested;
     bool          trackingFrozen;
@@ -178,7 +170,6 @@ class ElegooCC
     void continuePrint();
 
     void resetFilamentTracking();
-    void updateExpectedFilament(unsigned long currentTime);
     bool processFilamentTelemetry(JsonObject& printInfo, unsigned long currentTime);
     bool tryReadExtrusionValue(JsonObject& printInfo, const char* key, const char* hexKey,
                                float& output);
@@ -190,11 +181,6 @@ class ElegooCC
     bool shouldPausePrint(unsigned long currentTime);
     void checkFilamentMovement(unsigned long currentTime);
     void checkFilamentRunout(unsigned long currentTime);
-    void clearAggregatedBacklog();
-    void resetTotalBacklog(float totalValue);
-    void recalculateTotalBacklog();
-    bool aggregatedDeficitSatisfied(float outstandingValue, unsigned long now, float threshold,
-                                     unsigned long holdWindowMs);
 
    public:
     // Singleton access method

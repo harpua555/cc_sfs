@@ -4,7 +4,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
-#include "FilamentFlowTracker.h"
+#include "FilamentMotionSensor.h"
 #include "Logger.h"
 #include "SettingsManager.h"
 
@@ -63,16 +63,7 @@ ElegooCC::ElegooCC()
     lastSummaryLogMs             = 0;
     jamPauseRequested            = false;
     trackingFrozen               = false;
-    aggregatedOutstandingMm      = 0.0f;
-    aggregatedDeficitActive      = false;
-    aggregatedDeficitStartMs     = 0;
-    aggregatedDeltaPositiveSum   = 0.0f;
-    aggregatedDeltaNetSum        = 0.0f;
-    aggregatedTotalBaselineMm    = 0.0f;
-    aggregatedPulseDeductMm      = 0.0f;
-    aggregatedTotalBaselineValid = false;
-    lastTotalExtrusionValue      = 0.0f;
-    flowTracker.reset();
+    motionSensor.reset();
 
     waitingForAck       = false;
     pendingAckCommand   = -1;
@@ -192,8 +183,6 @@ void ElegooCC::handleStatus(JsonDocument &doc)
     String     mainboardId = doc["MainboardID"];
     unsigned long statusTimestamp = millis();
     lastStatusReceiveMs          = statusTimestamp;
-    bool useTotalBacklogMode = settingsManager.getUseTotalExtrusionBacklog();
-    bool useDeltaBacklog     = settingsManager.getUseTotalExtrusionDeficit();
     // Parse current status (which contains machine status array)
     if (status.containsKey("CurrentStatus"))
     {
@@ -254,28 +243,15 @@ void ElegooCC::handleStatus(JsonDocument &doc)
                 {
                     logger.log("Print status changed to printing (resume)");
                     trackingFrozen = false;
-                    // On resume, clear the accumulated deficit so jam
-                    // detection starts fresh from this point in the print.
-                    flowTracker.reset();
+                    // On resume, reset the motion sensor so jam detection starts fresh
+                    motionSensor.reset();
                     currentDeficitMm        = 0.0f;
                     deficitRatio            = 0.0f;
                     jamPauseRequested       = false;
                     filamentStopped         = false;
-                    if (useTotalBacklogMode)
+                    if (settingsManager.getVerboseLogging())
                     {
-                        resetTotalBacklog(expectedFilamentMM);
-                        if (settingsManager.getZeroDeficitLogging())
-                        {
-                            logger.log("Deficit reset to 0.00mm (resume after jam)");
-                        }
-                    }
-                    else if (useDeltaBacklog)
-                    {
-                        clearAggregatedBacklog();
-                        if (settingsManager.getZeroDeficitLogging())
-                        {
-                            logger.log("Deficit reset to 0.00mm (resume after jam)");
-                        }
+                        logger.log("Motion sensor reset (resume after pause)");
                     }
                 }
                 else
@@ -365,36 +341,21 @@ void ElegooCC::resetFilamentTracking()
     lastFlowLogMs              = 0;
     jamPauseRequested          = false;
     trackingFrozen             = false;
-    if (settingsManager.getZeroDeficitLogging())
-    {
-        logger.log("Deficit reset to 0.00mm (tracking reset)");
-    }
-    clearAggregatedBacklog();
-    flowTracker.reset();
-}
 
-void ElegooCC::updateExpectedFilament(unsigned long currentTime)
-{
-    if (trackingFrozen)
-    {
-        // While tracking is frozen (printer paused after a jam), keep the
-        // last-known deficit/telemetry state intact.
-        return;
-    }
+    // Configure and reset the motion sensor
+    int trackingMode = settingsManager.getTrackingMode();
+    int windowMs = settingsManager.getTrackingWindowMs();
+    float ewmaAlpha = settingsManager.getTrackingEwmaAlpha();
 
-    int staleMs = settingsManager.getFlowTelemetryStaleMs();
-    if (staleMs <= 0)
-    {
-        staleMs = EXPECTED_FILAMENT_STALE_MS;
-    }
+    motionSensor.setTrackingMode((FilamentTrackingMode)trackingMode, windowMs, ewmaAlpha);
+    motionSensor.reset();
 
-    if (expectedTelemetryAvailable &&
-        (currentTime - lastTelemetryReceiveMs) > (unsigned long) staleMs)
+    if (settingsManager.getVerboseLogging())
     {
-        // Telemetry is stale; stop treating it as available so we don't
-        // derive new movement-only decisions from it, but keep the existing
-        // outstanding deficit intact for debugging.
-        expectedTelemetryAvailable = false;
+        const char* modeNames[] = {"Cumulative", "Windowed", "EWMA"};
+        const char* modeName = (trackingMode >= 0 && trackingMode <= 2) ? modeNames[trackingMode] : "Unknown";
+        logger.logf("Filament tracking reset - Mode: %s, Window: %dms, EWMA Alpha: %.2f",
+                   modeName, windowMs, ewmaAlpha);
     }
 }
 
@@ -419,86 +380,34 @@ bool ElegooCC::tryReadExtrusionValue(JsonObject &printInfo, const char *key, con
 bool ElegooCC::processFilamentTelemetry(JsonObject &printInfo, unsigned long currentTime)
 {
     float totalValue = 0;
-    float deltaValue = 0;
     bool  hasTotal   = tryReadExtrusionValue(printInfo, "TotalExtrusion", TOTAL_EXTRUSION_HEX_KEY,
                                             totalValue);
-    bool  hasDelta   = tryReadExtrusionValue(printInfo, "CurrentExtrusion",
-                                            CURRENT_EXTRUSION_HEX_KEY, deltaValue);
-    bool  useTotalBacklogMode = settingsManager.getUseTotalExtrusionBacklog();
-    bool  useDeltaBacklog     = settingsManager.getUseTotalExtrusionDeficit();
-    bool  usingDeltaLogic     = useDeltaBacklog && !useTotalBacklogMode;
-    bool  packetFlowLogging   = settingsManager.getPacketFlowLogging();
 
+    // New simplified approach: only use TotalExtrusion (Klipper-style)
     if (hasTotal)
     {
         expectedFilamentMM = totalValue < 0 ? 0 : totalValue;
-        lastTotalExtrusionValue = expectedFilamentMM;
-    }
 
-    if (hasDelta)
-    {
-        lastExpectedDeltaMM = deltaValue;
-        if (deltaValue > 0)
-        {
-            if (usingDeltaLogic)
-            {
-                aggregatedOutstandingMm += deltaValue;
-            }
-            aggregatedDeltaPositiveSum += deltaValue;
-            aggregatedDeltaNetSum += deltaValue;
-            flowTracker.addExpected(deltaValue, currentTime, 0);
-        }
-        else if (deltaValue < 0)
-        {
-            if (usingDeltaLogic)
-            {
-                aggregatedOutstandingMm += deltaValue;
-                if (aggregatedOutstandingMm < 0.0f)
-                {
-                    aggregatedOutstandingMm = 0.0f;
-                }
-            }
-            flowTracker.addActual(-deltaValue);
-            aggregatedDeltaNetSum += deltaValue;
-        }
-    }
+        // Update the motion sensor with the new expected position
+        motionSensor.updateExpectedPosition(expectedFilamentMM);
 
-    if (useTotalBacklogMode && hasTotal)
-    {
-        if (!aggregatedTotalBaselineValid)
-        {
-            aggregatedTotalBaselineMm    = totalValue;
-            aggregatedTotalBaselineValid = true;
-        }
-        recalculateTotalBacklog();
-    }
-
-    // Track freshness of extrusion telemetry separately from general SDCP
-    // connectivity. We only mark extrusion telemetry as available when
-    // we actually observe TotalExtrusion or CurrentExtrusion in a status
-    // payload, and let updateExpectedFilament() mark it stale over time.
-    if (hasTotal || hasDelta)
-    {
+        // Mark telemetry as available and fresh
         expectedTelemetryAvailable = true;
         lastTelemetryReceiveMs     = currentTime;
-        if (packetFlowLogging)
+
+        if (settingsManager.getVerboseLogging())
         {
-            logger.logf(
-                "Packet log: time=%lu total=%.2f delta=%.2f delta_pos=%.2f delta_net=%.2f aggregated=%.2f pulses=%lu telem=%d",
-                currentTime, expectedFilamentMM, deltaValue, aggregatedDeltaPositiveSum,
-                aggregatedDeltaNetSum, aggregatedOutstandingMm, movementPulseCount,
-                expectedTelemetryAvailable ? 1 : 0);
+            logger.logf("Telemetry: total=%.2fmm, sensor=%.2fmm, deficit=%.2fmm, pulses=%lu",
+                        motionSensor.getExpectedDistance(),
+                        motionSensor.getSensorDistance(),
+                        motionSensor.getDeficit(),
+                        movementPulseCount);
         }
-        if (settingsManager.getTotalVsDeltaLogging() && hasTotal)
-        {
-            logger.logf("Telemetry compare: total=%.2f delta_pos=%.2f delta_net=%.2f "
-                        "aggregated=%.2f pulses=%lu",
-                        expectedFilamentMM, aggregatedDeltaPositiveSum, aggregatedDeltaNetSum,
-                        aggregatedOutstandingMm, movementPulseCount);
-        }
+
+        return true;
     }
 
-    return true;
+    return false;
 }
 
 void ElegooCC::pausePrint()
@@ -642,10 +551,7 @@ void ElegooCC::loop()
         }
     }
 
-    // Update expected filament feed if the printer is reporting it
-    updateExpectedFilament(currentTime);
-
-    // Before determining if we should pause, check if the filament is moving or it ran out
+    // Check filament sensors before determining if we should pause
     checkFilamentMovement(currentTime);
     checkFilamentRunout(currentTime);
 
@@ -674,8 +580,7 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
 {
     if (trackingFrozen)
     {
-        // When tracking is frozen (printer paused after a jam), leave the
-        // computed deficit and totals unchanged until the job is resumed.
+        // When tracking is frozen (printer paused after a jam), just track pin changes
         int currentMovementValue = digitalRead(MOVEMENT_SENSOR_PIN);
         if (currentMovementValue != lastMovementValue)
         {
@@ -688,12 +593,9 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
     int  currentMovementValue = digitalRead(MOVEMENT_SENSOR_PIN);
     bool debugFlow            = settingsManager.getVerboseLogging();
     bool summaryFlow          = settingsManager.getFlowSummaryLogging();
-    bool useTotalBacklogMode  = settingsManager.getUseTotalExtrusionBacklog();
-    bool useDeltaBacklog      = settingsManager.getUseTotalExtrusionDeficit();
-    bool usingDeltaLogic      = useDeltaBacklog && !useTotalBacklogMode;
     bool currentlyPrinting    = isPrinting();
 
-    // Track movement pulses so we know how much filament actually moved
+    // Track movement pulses - each pulse represents actual filament movement
     if (currentMovementValue != lastMovementValue)
     {
         if (lastMovementValue != -1 && isPrinting())
@@ -701,31 +603,19 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
             float movementMm = settingsManager.getMovementMmPerPulse();
             if (movementMm <= 0.0f)
             {
-                movementMm = 1.5f;
+                movementMm = 2.88f;  // Default sensor spec
             }
-            if (useTotalBacklogMode)
-            {
-                aggregatedPulseDeductMm += movementMm;
-                recalculateTotalBacklog();
-            }
-            else if (usingDeltaLogic)
-            {
-                aggregatedOutstandingMm -= movementMm;
-                if (aggregatedOutstandingMm < 0.0f)
-                {
-                    aggregatedOutstandingMm = 0.0f;
-                }
-            }
+
+            // Add pulse to motion sensor (Klipper-style)
+            motionSensor.addSensorPulse(movementMm);
             actualFilamentMM += movementMm;
-            flowTracker.addActual(movementMm);
             movementPulseCount++;
 
             if (debugFlow)
             {
-                logger.logf("Flow debug: movement pulse (value %d -> %d), pulses=%lu, "
-                            "actual=%.2fmm",
-                            lastMovementValue, currentMovementValue, movementPulseCount,
-                            actualFilamentMM);
+                logger.logf("Sensor pulse: %d->%d, total=%.2fmm, pulses=%lu",
+                            lastMovementValue, currentMovementValue,
+                            actualFilamentMM, movementPulseCount);
             }
         }
 
@@ -733,110 +623,76 @@ void ElegooCC::checkFilamentMovement(unsigned long currentTime)
         lastChangeTime    = currentTime;
     }
 
-    // If we don't have expected telemetry from SDCP, don't attempt movement-only detection.
-    // FilamentStopped should only be derived from SDCP extrusion data.
+    // If we don't have telemetry, we can't detect jams (only physical runout sensor works)
     if (!expectedTelemetryAvailable)
     {
-        // When extrusion telemetry is temporarily unavailable, avoid mutating
-        // the current deficit or jam state. We only clear the deficit on
-        // explicit tracking resets, not on transient telemetry gaps.
         return;
     }
 
-      float deficit          = 0;
-      bool  deficitTriggered = false;
-      float threshold        = settingsManager.getExpectedDeficitMM();
-      if (threshold <= 0)
-      {
-          threshold = DEFAULT_FILAMENT_DEFICIT_THRESHOLD_MM;
-      }
-      unsigned long holdMs = settingsManager.getExpectedFlowWindowMs();
-      if (holdMs == 0)
-      {
-          holdMs = EXPECTED_FILAMENT_STALE_MS;
-      }
-      // Time-based pruning of expected filament is disabled; only sensor
-      // pulses, negative SDCP deltas, or explicit print resets can reduce
-      // the outstanding deficit.
-      bool aggregatedMode = useTotalBacklogMode || usingDeltaLogic;
-      if (aggregatedMode)
-      {
-          deficit = aggregatedOutstandingMm;
-      }
-      else
-      {
-          deficit = flowTracker.outstanding(currentTime, 0);
-      }
-    if (deficit < 0)
+    // Get detection threshold (distance-based, not time-based)
+    float detectionLength = settingsManager.getDetectionLengthMM();
+    if (detectionLength <= 0)
     {
-        deficit = 0;
+        detectionLength = 10.0f;  // Default 10mm
     }
-    deficitTriggered = deficit >= threshold;
 
-      bool deficitHoldSatisfied =
-          aggregatedMode
-              ? aggregatedDeficitSatisfied(deficit, currentTime, threshold, holdMs)
-              : flowTracker.deficitSatisfied(deficit, currentTime, threshold, holdMs);
+    // Get grace period setting (handles SDCP look-ahead behavior)
+    unsigned long gracePeriod = settingsManager.getDetectionGracePeriodMs();
+    if (gracePeriod <= 0)
+    {
+        gracePeriod = 500;  // Default 500ms
+    }
 
+    // Distance-based jam detection with grace period (Klipper-style + SDCP adaptation)
+    bool jammed = motionSensor.isJammed(detectionLength, gracePeriod);
+    float deficit = motionSensor.getDeficit();
+
+    // Update metrics for UI/logging
     currentDeficitMm   = deficit;
-    deficitThresholdMm = threshold;
-    deficitRatio       = (threshold > 0.0f) ? (deficit / threshold) : 0.0f;
+    deficitThresholdMm = detectionLength;
+    deficitRatio       = (detectionLength > 0.0f) ? (deficit / detectionLength) : 0.0f;
 
+    // Periodic logging
     if (debugFlow && currentlyPrinting && (currentTime - lastFlowLogMs) >= EXPECTED_FILAMENT_SAMPLE_MS)
     {
         lastFlowLogMs = currentTime;
         logger.logf(
-            "Flow debug: cycle tele=%d expected=%.2fmm actual=%.2fmm deficit=%.2fmm "
-            "threshold=%.2fmm ratio=%.2f pulses=%lu",
-            expectedTelemetryAvailable ? 1 : 0, expectedFilamentMM, actualFilamentMM,
-            currentDeficitMm, deficitThresholdMm, deficitRatio, movementPulseCount);
+            "Flow: expected=%.2fmm sensor=%.2fmm deficit=%.2fmm threshold=%.2fmm ratio=%.2f pulses=%lu jammed=%d",
+            motionSensor.getExpectedDistance(), motionSensor.getSensorDistance(),
+            currentDeficitMm, deficitThresholdMm, deficitRatio, movementPulseCount, jammed ? 1 : 0);
     }
 
-    // Optional condensed logging mode: one summary line per second, even when full
-    // verbose logging is disabled. Designed to make long-run debugging easier.
     if (summaryFlow && currentlyPrinting && !debugFlow && (currentTime - lastSummaryLogMs) >= 1000)
     {
         lastSummaryLogMs = currentTime;
-        logger.logf("Flow summary: tele=%d expected=%.2fmm actual=%.2fmm deficit=%.2fmm "
+        logger.logf("Flow summary: expected=%.2fmm sensor=%.2fmm deficit=%.2fmm "
                     "threshold=%.2fmm ratio=%.2f pulses=%lu",
-                    expectedTelemetryAvailable ? 1 : 0, expectedFilamentMM, actualFilamentMM,
+                    motionSensor.getExpectedDistance(), motionSensor.getSensorDistance(),
                     currentDeficitMm, deficitThresholdMm, deficitRatio, movementPulseCount);
     }
 
-    bool newFilamentStopped = deficitHoldSatisfied;
-
-    if (newFilamentStopped && !filamentStopped)
+    // Jam state change detection and logging
+    if (jammed && !filamentStopped)
     {
-        if (deficitTriggered)
-        {
-            logger.logf(
-                "Filament deficit detected (outstanding %.2fmm, threshold %.2fmm, hold %lums, last "
-                "delta %.2fmm)",
-                deficit, threshold, holdMs, lastExpectedDeltaMM);
-        }
-        else
-        {
-            logger.logf("Filament movement stopped, last movement detected %dms ago",
-                        currentTime - lastChangeTime);
-        }
+        logger.logf("Filament jam detected! Expected %.2fmm, sensor %.2fmm, deficit %.2fmm (threshold %.2fmm)",
+                    motionSensor.getExpectedDistance(), motionSensor.getSensorDistance(),
+                    deficit, detectionLength);
     }
-    else if (!newFilamentStopped && filamentStopped)
+    else if (!jammed && filamentStopped)
     {
-        // Once we've requested a jam-driven pause, keep the jam state latched
-        // until the printer has actually transitioned to a paused state and
-        // then resumed. Avoid logging "movement started" prematurely in that
-        // window so the UI keeps showing the jam condition.
+        // Keep jam latched until pause/resume cycle completes
         if (!jamPauseRequested && !trackingFrozen)
         {
-            logger.log("Filament movement started");
+            logger.log("Filament flow resumed");
             filamentStopped = false;
         }
     }
 
+    // Update jam state (unless latched by pause request)
     if (!jamPauseRequested && !trackingFrozen)
     {
-    filamentStopped = newFilamentStopped;
-}
+        filamentStopped = jammed;
+    }
 }
 
 bool ElegooCC::shouldPausePrint(unsigned long currentTime)
@@ -957,81 +813,6 @@ printer_info_t ElegooCC::getCurrentInformation()
     info.movementPulseCount   = movementPulseCount;
 
     return info;
-}
-
-void ElegooCC::clearAggregatedBacklog()
-{
-    aggregatedOutstandingMm = 0.0f;
-    aggregatedDeficitActive = false;
-    aggregatedDeficitStartMs = 0;
-    aggregatedDeltaPositiveSum = 0.0f;
-    aggregatedDeltaNetSum      = 0.0f;
-    aggregatedTotalBaselineMm  = 0.0f;
-    aggregatedTotalBaselineValid = false;
-    aggregatedPulseDeductMm      = 0.0f;
-}
-
-void ElegooCC::resetTotalBacklog(float totalValue)
-{
-    aggregatedTotalBaselineMm    = totalValue;
-    aggregatedTotalBaselineValid = true;
-    aggregatedPulseDeductMm      = 0.0f;
-    aggregatedOutstandingMm      = 0.0f;
-    lastTotalExtrusionValue      = totalValue;
-}
-
-void ElegooCC::recalculateTotalBacklog()
-{
-    if (!aggregatedTotalBaselineValid)
-    {
-        return;
-    }
-    float requested = lastTotalExtrusionValue - aggregatedTotalBaselineMm;
-    if (requested < 0.0f)
-    {
-        requested = 0.0f;
-    }
-    if (aggregatedPulseDeductMm > requested)
-    {
-        aggregatedPulseDeductMm = requested;
-    }
-    aggregatedOutstandingMm = requested - aggregatedPulseDeductMm;
-    if (aggregatedOutstandingMm < 0.0f)
-    {
-        aggregatedOutstandingMm = 0.0f;
-    }
-}
-
-bool ElegooCC::aggregatedDeficitSatisfied(float outstandingValue, unsigned long now,
-                                          float threshold, unsigned long holdWindowMs)
-{
-    if (threshold <= 0 || holdWindowMs == 0)
-    {
-        aggregatedDeficitActive = false;
-        aggregatedDeficitStartMs = 0;
-        return false;
-    }
-
-    if (outstandingValue >= threshold)
-    {
-        if (!aggregatedDeficitActive)
-        {
-            aggregatedDeficitActive  = true;
-            aggregatedDeficitStartMs = now;
-        }
-    }
-    else
-    {
-        aggregatedDeficitActive  = false;
-        aggregatedDeficitStartMs = 0;
-    }
-
-    if (!aggregatedDeficitActive)
-    {
-        return false;
-    }
-
-    return (now - aggregatedDeficitStartMs) >= holdWindowMs;
 }
 
 bool ElegooCC::discoverPrinterIP(String &outIp, unsigned long timeoutMs)

@@ -26,20 +26,27 @@ SettingsManager::SettingsManager()
     settings.start_print_timeout = 10000;
     settings.enabled             = true;
     settings.has_connected       = false;
-    settings.expected_deficit_mm      = 8.4f;
-    settings.expected_flow_window_ms  = 1500;
-    settings.sdcp_loss_behavior       = 2;
-    settings.flow_telemetry_stale_ms  = 1000;
-    settings.ui_refresh_interval_ms   = 1000;
+    settings.detection_length_mm        = 10.0f;  // Klipper default is 7mm, we use 10mm
+    settings.detection_grace_period_ms  = 500;    // 500ms grace period (reduced from 1500ms)
+    settings.tracking_mode              = 1;      // 1 = Windowed (Klipper-style)
+    settings.tracking_window_ms         = 5000;   // 5 second sliding window
+    settings.tracking_ewma_alpha        = 0.3f;   // 30% weight on new samples
+    settings.sdcp_loss_behavior         = 2;
+    settings.flow_telemetry_stale_ms    = 1000;
+    settings.ui_refresh_interval_ms     = 1000;
+    settings.dev_mode                   = false;
+    settings.verbose_logging            = false;
+    settings.flow_summary_logging       = false;
+    settings.movement_mm_per_pulse      = 2.88f;  // Actual sensor spec (2.88mm per pulse)
+
+    // Deprecated settings (for migration)
+    settings.expected_deficit_mm      = 0.0f;
+    settings.expected_flow_window_ms  = 0;
     settings.zero_deficit_logging           = false;
     settings.use_total_extrusion_deficit    = false;
     settings.total_vs_delta_logging         = false;
     settings.packet_flow_logging            = false;
-    settings.use_total_extrusion_backlog    = false;
-    settings.dev_mode                       = false;
-    settings.verbose_logging          = false;
-    settings.flow_summary_logging     = false;
-    settings.movement_mm_per_pulse    = 1.5f;
+    settings.use_total_extrusion_backlog    = true;  // Always true now
 }
 
 bool SettingsManager::load()
@@ -71,11 +78,23 @@ bool SettingsManager::load()
     settings.enabled             = doc["enabled"] | true;
     settings.start_print_timeout = doc["start_print_timeout"] | 10000;
     settings.has_connected       = doc["has_connected"] | false;
-    settings.expected_deficit_mm =
-        doc.containsKey("expected_deficit_mm") ? doc["expected_deficit_mm"].as<float>() : 8.4f;
-    settings.expected_flow_window_ms =
-        doc.containsKey("expected_flow_window_ms") ? doc["expected_flow_window_ms"].as<int>()
-                                                   : 1500;
+
+    // Migrate old expected_deficit_mm to new detection_length_mm
+    if (doc.containsKey("detection_length_mm"))
+    {
+        settings.detection_length_mm = doc["detection_length_mm"].as<float>();
+    }
+    else if (doc.containsKey("expected_deficit_mm"))
+    {
+        // Migration path: use old value if new one doesn't exist
+        settings.detection_length_mm = doc["expected_deficit_mm"].as<float>();
+        logger.log("Migrated expected_deficit_mm to detection_length_mm");
+    }
+    else
+    {
+        settings.detection_length_mm = 10.0f;  // Default
+    }
+
     settings.sdcp_loss_behavior =
         doc.containsKey("sdcp_loss_behavior") ? doc["sdcp_loss_behavior"].as<int>() : 2;
     settings.flow_telemetry_stale_ms =
@@ -86,26 +105,6 @@ bool SettingsManager::load()
         doc.containsKey("ui_refresh_interval_ms")
             ? doc["ui_refresh_interval_ms"].as<int>()
             : 1000;
-    settings.zero_deficit_logging =
-        doc.containsKey("zero_deficit_logging")
-            ? doc["zero_deficit_logging"].as<bool>()
-            : false;
-    settings.use_total_extrusion_deficit =
-        doc.containsKey("use_total_extrusion_deficit")
-            ? doc["use_total_extrusion_deficit"].as<bool>()
-            : false;
-    settings.total_vs_delta_logging =
-        doc.containsKey("total_vs_delta_logging")
-            ? doc["total_vs_delta_logging"].as<bool>()
-            : false;
-    settings.packet_flow_logging =
-        doc.containsKey("packet_flow_logging")
-            ? doc["packet_flow_logging"].as<bool>()
-            : false;
-    settings.use_total_extrusion_backlog =
-        doc.containsKey("use_total_extrusion_backlog")
-            ? doc["use_total_extrusion_backlog"].as<bool>()
-            : false;
     settings.dev_mode =
         doc.containsKey("dev_mode") ? doc["dev_mode"].as<bool>() : false;
     settings.verbose_logging = doc.containsKey("verbose_logging")
@@ -116,7 +115,28 @@ bool SettingsManager::load()
                                         : false;
     settings.movement_mm_per_pulse = doc.containsKey("movement_mm_per_pulse")
                                          ? doc["movement_mm_per_pulse"].as<float>()
-                                         : 1.5f;
+                                         : 2.88f;  // Correct sensor spec
+    settings.detection_grace_period_ms = doc.containsKey("detection_grace_period_ms")
+                                             ? doc["detection_grace_period_ms"].as<int>()
+                                             : 500;  // Default 500ms
+    settings.tracking_mode = doc.containsKey("tracking_mode")
+                                 ? doc["tracking_mode"].as<int>()
+                                 : 1;  // Default to Windowed mode
+    settings.tracking_window_ms = doc.containsKey("tracking_window_ms")
+                                      ? doc["tracking_window_ms"].as<int>()
+                                      : 5000;  // Default 5 seconds
+    settings.tracking_ewma_alpha = doc.containsKey("tracking_ewma_alpha")
+                                       ? doc["tracking_ewma_alpha"].as<float>()
+                                       : 0.3f;  // Default 0.3
+
+    // Load deprecated settings for backwards compatibility (ignored in new code)
+    settings.expected_deficit_mm = settings.detection_length_mm;  // Keep in sync
+    settings.expected_flow_window_ms = 0;
+    settings.zero_deficit_logging = false;
+    settings.use_total_extrusion_deficit = false;
+    settings.total_vs_delta_logging = false;
+    settings.packet_flow_logging = false;
+    settings.use_total_extrusion_backlog = true;
 
     isLoaded = true;
     return true;
@@ -200,14 +220,40 @@ bool SettingsManager::getHasConnected()
     return getSettings().has_connected;
 }
 
+float SettingsManager::getDetectionLengthMM()
+{
+    return getSettings().detection_length_mm;
+}
+
+int SettingsManager::getDetectionGracePeriodMs()
+{
+    return getSettings().detection_grace_period_ms;
+}
+
+int SettingsManager::getTrackingMode()
+{
+    return getSettings().tracking_mode;
+}
+
+int SettingsManager::getTrackingWindowMs()
+{
+    return getSettings().tracking_window_ms;
+}
+
+float SettingsManager::getTrackingEwmaAlpha()
+{
+    return getSettings().tracking_ewma_alpha;
+}
+
+// Deprecated getters
 float SettingsManager::getExpectedDeficitMM()
 {
-    return getSettings().expected_deficit_mm;
+    return getSettings().detection_length_mm;  // Redirect to new setting
 }
 
 int SettingsManager::getExpectedFlowWindowMs()
 {
-    return getSettings().expected_flow_window_ms;
+    return 0;  // No longer used (distance-based detection only)
 }
 
 int SettingsManager::getSdcpLossBehavior()
@@ -225,29 +271,6 @@ int SettingsManager::getUiRefreshIntervalMs()
     return getSettings().ui_refresh_interval_ms;
 }
 
-bool SettingsManager::getZeroDeficitLogging()
-{
-    return getSettings().zero_deficit_logging;
-}
-
-bool SettingsManager::getUseTotalExtrusionDeficit()
-{
-    return getSettings().use_total_extrusion_deficit;
-}
-
-bool SettingsManager::getTotalVsDeltaLogging()
-{
-    return getSettings().total_vs_delta_logging;
-}
-
-bool SettingsManager::getPacketFlowLogging()
-{
-    return getSettings().packet_flow_logging;
-}
-bool SettingsManager::getUseTotalExtrusionBacklog()
-{
-    return getSettings().use_total_extrusion_backlog;
-}
 bool SettingsManager::getDevMode()
 {
     return getSettings().dev_mode;
@@ -336,18 +359,46 @@ void SettingsManager::setHasConnected(bool hasConnected)
     settings.has_connected = hasConnected;
 }
 
-void SettingsManager::setExpectedDeficitMM(float value)
+void SettingsManager::setDetectionLengthMM(float value)
 {
     if (!isLoaded)
         load();
-    settings.expected_deficit_mm = value;
+    settings.detection_length_mm = value;
+    settings.expected_deficit_mm = value;  // Keep deprecated field in sync
 }
 
-void SettingsManager::setExpectedFlowWindowMs(int windowMs)
+void SettingsManager::setDetectionGracePeriodMs(int periodMs)
 {
     if (!isLoaded)
         load();
-    settings.expected_flow_window_ms = windowMs;
+    settings.detection_grace_period_ms = periodMs;
+}
+
+void SettingsManager::setTrackingMode(int mode)
+{
+    if (!isLoaded)
+        load();
+    settings.tracking_mode = mode;
+}
+
+void SettingsManager::setTrackingWindowMs(int windowMs)
+{
+    if (!isLoaded)
+        load();
+    settings.tracking_window_ms = windowMs;
+}
+
+void SettingsManager::setTrackingEwmaAlpha(float alpha)
+{
+    if (!isLoaded)
+        load();
+    settings.tracking_ewma_alpha = alpha;
+}
+
+// Deprecated setter
+void SettingsManager::setExpectedDeficitMM(float value)
+{
+    setDetectionLengthMM(value);  // Redirect to new setter
 }
 
 void SettingsManager::setSdcpLossBehavior(int behavior)
@@ -369,40 +420,6 @@ void SettingsManager::setUiRefreshIntervalMs(int intervalMs)
     if (!isLoaded)
         load();
     settings.ui_refresh_interval_ms = intervalMs;
-}
-
-void SettingsManager::setZeroDeficitLogging(bool enabled)
-{
-    if (!isLoaded)
-        load();
-    settings.zero_deficit_logging = enabled;
-}
-
-void SettingsManager::setUseTotalExtrusionDeficit(bool enabled)
-{
-    if (!isLoaded)
-        load();
-    settings.use_total_extrusion_deficit = enabled;
-}
-
-void SettingsManager::setTotalVsDeltaLogging(bool enabled)
-{
-    if (!isLoaded)
-        load();
-    settings.total_vs_delta_logging = enabled;
-}
-
-void SettingsManager::setPacketFlowLogging(bool enabled)
-{
-    if (!isLoaded)
-        load();
-    settings.packet_flow_logging = enabled;
-}
-void SettingsManager::setUseTotalExtrusionBacklog(bool enabled)
-{
-    if (!isLoaded)
-        load();
-    settings.use_total_extrusion_backlog = enabled;
 }
 
 void SettingsManager::setDevMode(bool devMode)
@@ -445,20 +462,18 @@ String SettingsManager::toJson(bool includePassword)
     doc["start_print_timeout"] = settings.start_print_timeout;
     doc["enabled"]             = settings.enabled;
     doc["has_connected"]       = settings.has_connected;
-    doc["expected_deficit_mm"] = settings.expected_deficit_mm;
-    doc["expected_flow_window_ms"] = settings.expected_flow_window_ms;
-    doc["sdcp_loss_behavior"]  = settings.sdcp_loss_behavior;
-    doc["flow_telemetry_stale_ms"] = settings.flow_telemetry_stale_ms;
-    doc["ui_refresh_interval_ms"]  = settings.ui_refresh_interval_ms;
-    doc["zero_deficit_logging"]    = settings.zero_deficit_logging;
-    doc["use_total_extrusion_deficit"] = settings.use_total_extrusion_deficit;
-    doc["total_vs_delta_logging"] = settings.total_vs_delta_logging;
-    doc["packet_flow_logging"] = settings.packet_flow_logging;
-    doc["use_total_extrusion_backlog"] = settings.use_total_extrusion_backlog;
-    doc["dev_mode"]              = settings.dev_mode;
-    doc["verbose_logging"]       = settings.verbose_logging;
-    doc["flow_summary_logging"]  = settings.flow_summary_logging;
-    doc["movement_mm_per_pulse"] = settings.movement_mm_per_pulse;
+    doc["detection_length_mm"]        = settings.detection_length_mm;  // New unified setting
+    doc["detection_grace_period_ms"]  = settings.detection_grace_period_ms;
+    doc["tracking_mode"]              = settings.tracking_mode;
+    doc["tracking_window_ms"]         = settings.tracking_window_ms;
+    doc["tracking_ewma_alpha"]        = settings.tracking_ewma_alpha;
+    doc["sdcp_loss_behavior"]         = settings.sdcp_loss_behavior;
+    doc["flow_telemetry_stale_ms"]    = settings.flow_telemetry_stale_ms;
+    doc["ui_refresh_interval_ms"]     = settings.ui_refresh_interval_ms;
+    doc["dev_mode"]                   = settings.dev_mode;
+    doc["verbose_logging"]            = settings.verbose_logging;
+    doc["flow_summary_logging"]       = settings.flow_summary_logging;
+    doc["movement_mm_per_pulse"]      = settings.movement_mm_per_pulse;
 
     if (includePassword)
     {
