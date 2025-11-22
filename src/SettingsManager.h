@@ -16,7 +16,7 @@ struct user_settings
     bool   has_connected;
     float  detection_length_mm;          // DEPRECATED: Use ratio-based detection instead
     int    detection_grace_period_ms;    // Grace period after move command before checking jams
-    float  detection_ratio_threshold;    // Soft jam: deficit ratio threshold (0.7 = 70% deficit, < 30% passing)
+    float  detection_ratio_threshold;    // Soft jam: pass ratio threshold (0.25 = 25% actual allowed before alert)
     float  detection_hard_jam_mm;        // Hard jam: mm expected with zero movement to trigger
     int    detection_soft_jam_time_ms;   // Soft jam: how long ratio must stay bad (ms, e.g., 3000 = 3 sec)
     int    detection_hard_jam_time_ms;   // Hard jam: how long zero movement required (ms, e.g., 2000 = 2 sec)

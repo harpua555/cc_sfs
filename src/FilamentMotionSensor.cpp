@@ -1,5 +1,7 @@
 #include "FilamentMotionSensor.h"
 
+static const unsigned long INVALID_SAMPLE_TIMESTAMP = ~0UL;
+
 FilamentMotionSensor::FilamentMotionSensor()
 {
     trackingMode = TRACKING_MODE_WINDOWED;  // Default to windowed mode
@@ -11,7 +13,7 @@ FilamentMotionSensor::FilamentMotionSensor()
 void FilamentMotionSensor::reset()
 {
     initialized           = false;
-    lastExpectedUpdateMs  = 0;
+    lastExpectedUpdateMs  = millis();
 
     // Reset cumulative state
     baselinePositionMm    = 0.0f;
@@ -34,9 +36,17 @@ void FilamentMotionSensor::reset()
     ewmaLastExpectedMm    = 0.0f;
     ewmaLastActualMm      = 0.0f;
 
-    // Reset jam hysteresis
-    jamConsecutiveCount     = 0;
-    hardJamConsecutiveCount = 0;
+    // Reset jam tracking
+    lastWindowDeficitMm     = 0.0f;
+    lastDeficitTimestampMs  = 0;
+    hardJamStartMs          = 0;
+    softJamStartMs          = 0;
+    hardJamAccumExpectedMm  = 0.0f;
+    hardJamAccumActualMm    = 0.0f;
+    hardJamLastSampleMs     = INVALID_SAMPLE_TIMESTAMP;
+    softJamAccumExpectedMm  = 0.0f;
+    softJamAccumActualMm    = 0.0f;
+    softJamLastSampleMs     = INVALID_SAMPLE_TIMESTAMP;
 }
 
 void FilamentMotionSensor::setTrackingMode(FilamentTrackingMode mode, unsigned long windowMs,
@@ -227,82 +237,183 @@ void FilamentMotionSensor::getWindowedDistances(float &expectedMm, float &actual
 }
 
 bool FilamentMotionSensor::isJammed(float ratioThreshold, float hardJamThresholdMm,
-                                     int softJamTimeMs, int hardJamTimeMs, int checkIntervalMs,
-                                     unsigned long gracePeriodMs) const
+                                    int softJamTimeMs, int hardJamTimeMs, int checkIntervalMs,
+                                    unsigned long gracePeriodMs) const
 {
-    if (!initialized || ratioThreshold <= 0.0f || checkIntervalMs <= 0)
+    if (!initialized || checkIntervalMs <= 0)
     {
-        jamConsecutiveCount = 0;
-        hardJamConsecutiveCount = 0;
+        hardJamStartMs = 0;
+        softJamStartMs = 0;
         return false;
     }
 
-    // Calculate required consecutive checks based on time thresholds
-    // e.g., 3000ms / 1000ms per check = 3 consecutive checks required
-    int softJamChecksRequired = (softJamTimeMs + checkIntervalMs - 1) / checkIntervalMs;  // Ceiling division
-    int hardJamChecksRequired = (hardJamTimeMs + checkIntervalMs - 1) / checkIntervalMs;
+    if (ratioThreshold <= 0.0f)
+    {
+        ratioThreshold = 0.25f;
+    }
+    if (ratioThreshold > 1.0f)
+    {
+        ratioThreshold = 1.0f;
+    }
+    if (softJamTimeMs <= 0)
+    {
+        softJamTimeMs = 10000;
+    }
+    if (hardJamTimeMs <= 0)
+    {
+        hardJamTimeMs = 5000;
+    }
 
-    // Ensure at least 1 check required
-    if (softJamChecksRequired < 1) softJamChecksRequired = 1;
-    if (hardJamChecksRequired < 1) hardJamChecksRequired = 1;
-
-    // Grace period: Don't check immediately after expected position update
+    unsigned long currentTime = millis();
     if (gracePeriodMs > 0)
     {
-        unsigned long timeSinceUpdate = millis() - lastExpectedUpdateMs;
+        unsigned long timeSinceUpdate = currentTime - lastExpectedUpdateMs;
         if (timeSinceUpdate < gracePeriodMs)
         {
-            jamConsecutiveCount = 0;
-            hardJamConsecutiveCount = 0;
-            return false;  // Still within grace period
+            hardJamStartMs = 0;
+            softJamStartMs = 0;
+            return false;
         }
     }
 
-    // Get distances based on tracking mode
     float expectedDistance = getExpectedDistance();
     float actualDistance   = getSensorDistance();
-
-    // Hard jam detection: No movement at all while expecting filament
-    // This catches complete blockages quickly (e.g., 2 consecutive checks = ~2 seconds)
-    if (expectedDistance >= hardJamThresholdMm && actualDistance < 0.1f)
+    float windowDeficit    = expectedDistance - actualDistance;
+    if (windowDeficit < 0.0f)
     {
-        hardJamConsecutiveCount++;
-        if (hardJamConsecutiveCount >= hardJamChecksRequired)
+        windowDeficit = 0.0f;
+    }
+
+    unsigned long deltaMs = (lastDeficitTimestampMs == 0) ? 0 : (currentTime - lastDeficitTimestampMs);
+    float deficitGrowthRateMmPerSec = 0.0f;
+    if (deltaMs > 0)
+    {
+        float deltaDeficit = windowDeficit - lastWindowDeficitMm;
+        deficitGrowthRateMmPerSec = (deltaDeficit * 1000.0f) / deltaMs;
+        if (deficitGrowthRateMmPerSec < 0.0f)
         {
-            return true;  // Hard jam - complete blockage/snag
+            deficitGrowthRateMmPerSec = 0.0f;
+        }
+    }
+    lastWindowDeficitMm    = windowDeficit;
+    lastDeficitTimestampMs = currentTime;
+
+    float passingRatio = (expectedDistance > 0.0f) ? (actualDistance / expectedDistance) : 1.0f;
+    if (passingRatio < 0.0f)
+    {
+        passingRatio = 0.0f;
+    }
+
+    float latestExpected = 0.0f;
+    int latestSampleIndex = -1;
+    if (sampleCount > 0)
+    {
+        latestSampleIndex = (nextSampleIndex - 1 + MAX_SAMPLES) % MAX_SAMPLES;
+        if (latestSampleIndex >= 0 && latestSampleIndex < MAX_SAMPLES)
+        {
+            latestExpected = samples[latestSampleIndex].expectedMm;
+        }
+    }
+
+    const float MIN_EXPECTED_DELTA = 0.05f;
+    const float HARD_PASS_RATIO_THRESHOLD = 0.10f;
+    const float MIN_HARD_EXPECTED_MM    = hardJamThresholdMm;
+    const float MIN_SOFT_EXPECTED_MM    = hardJamThresholdMm / 2.0f;
+    const float MIN_SOFT_DEFICIT_MM     = 0.5f;
+
+    bool expectedAdvancing = latestExpected >= MIN_EXPECTED_DELTA;
+
+    if (expectedAdvancing)
+    {
+        if (latestSampleIndex >= 0 && latestSampleIndex < MAX_SAMPLES)
+        {
+            unsigned long sampleMs = samples[latestSampleIndex].timestampMs;
+            if (sampleMs != INVALID_SAMPLE_TIMESTAMP && sampleMs != hardJamLastSampleMs)
+            {
+                hardJamAccumExpectedMm += samples[latestSampleIndex].expectedMm;
+                hardJamAccumActualMm += samples[latestSampleIndex].actualMm;
+                hardJamLastSampleMs = sampleMs;
+            }
+        }
+
+        float hardAccumRatio = (hardJamAccumExpectedMm > 0.0f)
+                                   ? (hardJamAccumActualMm / hardJamAccumExpectedMm)
+                                   : 1.0f;
+
+        if (hardAccumRatio < HARD_PASS_RATIO_THRESHOLD)
+        {
+            if (hardJamStartMs == 0)
+            {
+                hardJamStartMs = currentTime;
+            }
+
+            if (currentTime - hardJamStartMs >= (unsigned long)hardJamTimeMs)
+            {
+                return true;
+            }
+        }
+        else
+        {
+            hardJamStartMs = 0;
+            hardJamAccumExpectedMm = 0.0f;
+            hardJamAccumActualMm = 0.0f;
+            hardJamLastSampleMs = INVALID_SAMPLE_TIMESTAMP;
+        }
+
+            if (latestSampleIndex >= 0 && latestSampleIndex < MAX_SAMPLES)
+            {
+                unsigned long sampleMs = samples[latestSampleIndex].timestampMs;
+                if (sampleMs != INVALID_SAMPLE_TIMESTAMP && sampleMs != softJamLastSampleMs)
+                {
+                    softJamAccumExpectedMm += samples[latestSampleIndex].expectedMm;
+                    softJamAccumActualMm += samples[latestSampleIndex].actualMm;
+                    softJamLastSampleMs = sampleMs;
+                }
+            }
+
+        float softAccumRatio = (softJamAccumExpectedMm > 0.0f)
+                                   ? (softJamAccumActualMm / softJamAccumExpectedMm)
+                                   : 1.0f;
+        float softAccumDeficit = softJamAccumExpectedMm - softJamAccumActualMm;
+        if (softAccumDeficit < 0.0f)
+        {
+            softAccumDeficit = 0.0f;
+        }
+
+        if (softAccumRatio < ratioThreshold)
+        {
+            if (softJamStartMs == 0)
+            {
+                softJamStartMs = currentTime;
+            }
+
+            if (softAccumDeficit >= MIN_SOFT_DEFICIT_MM &&
+                currentTime - softJamStartMs >= (unsigned long)softJamTimeMs)
+            {
+                return true;
+            }
+        }
+        else
+        {
+            softJamStartMs = 0;
+            softJamAccumExpectedMm = 0.0f;
+            softJamAccumActualMm = 0.0f;
+            softJamLastSampleMs = INVALID_SAMPLE_TIMESTAMP;
         }
     }
     else
     {
-        hardJamConsecutiveCount = 0;
+        hardJamStartMs = 0;
+        hardJamAccumExpectedMm = 0.0f;
+        hardJamAccumActualMm = 0.0f;
+        hardJamLastSampleMs = INVALID_SAMPLE_TIMESTAMP;
+        softJamStartMs = 0;
+        softJamAccumExpectedMm = 0.0f;
+        softJamAccumActualMm = 0.0f;
+        softJamLastSampleMs = INVALID_SAMPLE_TIMESTAMP;
     }
 
-    // Minimum distance check (prevents false positives on tiny movements)
-    if (expectedDistance < 1.0f)
-    {
-        jamConsecutiveCount = 0;
-        return false;
-    }
-
-    // Soft jam detection: Calculate deficit ratio
-    // ratio = actual / expected (e.g., 0.3 = 30% of filament passing)
-    // deficitRatio = (expected - actual) / expected (e.g., 0.7 = 70% deficit)
-    float ratio = actualDistance / expectedDistance;
-    float deficitRatio = 1.0f - ratio;
-
-    // Hysteresis: Require sustained bad ratio to prevent transient spike false positives
-    // This is critical for windowed tracking where samples expire causing temporary spikes
-    if (deficitRatio > ratioThreshold)  // e.g., > 0.7 means < 30% passing
-    {
-        jamConsecutiveCount++;
-        return jamConsecutiveCount >= softJamChecksRequired;  // e.g., 3 checks = ~3 seconds
-    }
-    else
-    {
-        // Ratio acceptable - reset counter
-        jamConsecutiveCount = 0;
-        return false;
-    }
+    return false;
 }
 
 float FilamentMotionSensor::getDeficit() const
@@ -386,9 +497,7 @@ float FilamentMotionSensor::getFlowRatio() const
     }
 
     float expectedDistance = getExpectedDistance();
-
-    // Need at least 1mm of expected movement for meaningful ratio
-    if (expectedDistance < 1.0f)
+    if (expectedDistance <= 0.0f)
     {
         return 0.0f;
     }

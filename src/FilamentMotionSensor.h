@@ -128,10 +128,17 @@ class FilamentMotionSensor
     float ewmaLastExpectedMm;
     float ewmaLastActualMm;
 
-    // Jam detection hysteresis (prevents false positives from transient spikes)
-    mutable int jamConsecutiveCount;       // Counter for soft jam detection (ratio-based)
-    mutable int hardJamConsecutiveCount;   // Counter for hard jam detection (zero movement)
-
+    // Jam detection trackers
+    mutable float lastWindowDeficitMm;     // Last deficit used to compute growth rate
+    mutable unsigned long lastDeficitTimestampMs;
+    mutable unsigned long hardJamStartMs;  // When low ratio streak began
+    mutable unsigned long softJamStartMs;  // When deficit growth streak began
+    mutable float hardJamAccumExpectedMm;
+    mutable float hardJamAccumActualMm;
+    mutable float softJamAccumExpectedMm;
+    mutable float softJamAccumActualMm;
+    mutable unsigned long hardJamLastSampleMs;
+    mutable unsigned long softJamLastSampleMs;
     // Helper methods for windowed tracking
     void addSample(float expectedDeltaMm, float actualDeltaMm);
     void pruneOldSamples();

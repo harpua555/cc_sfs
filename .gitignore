@@ -27,5 +27,6 @@ SDCP_LOOKAHEAD_FIX.md
 TRACKING_ALGORITHMS.md
 WEBUI_TRACKING_SETTINGS.md
 act.sh
-act/
+act
 merge_bin.py
+test/render/filament_log*
